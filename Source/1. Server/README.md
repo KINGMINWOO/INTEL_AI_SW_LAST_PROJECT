@@ -1,3 +1,5 @@
-# INTEL_AI_SW_LAST_PROJECT
+# [Intel]AI+SW 아카데미 최종 종합 프로젝트
 
-[Intel]AI+SW 아카데미 최종 종합 프로젝트
+## SERVER
+
+### 이 폴더에는 프로젝트 전체 데이터 흐름을 제어하는 서버 및 작물 상태 추론 AI 모델 관련 소스코드가 업로드됩니다.
