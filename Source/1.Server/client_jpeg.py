@@ -1,0 +1,138 @@
+# client_jpeg.py (라즈베리 파이에서 실행)
+import socket
+import cv2 # cv2.imencode를 위해 유지
+import struct
+import time
+import threading # 스레딩 라이브러리 임포트
+import sys
+
+AUTH_PROMPT = "AUTH_REQUEST"
+AUTH_OK = "AUTH_OK"
+CLIENT_ID = "default_user"
+CLIENT_PASSWORD = "default_pass"
+
+
+def _recv_line(sock):
+    """Receive a single newline-terminated message from the server."""
+    buffer = b""
+    while b"\n" not in buffer:
+        chunk = sock.recv(1024)
+        if not chunk:
+            return None
+        buffer += chunk
+    line, _ = buffer.split(b"\n", 1)
+    try:
+        return line.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        return None
+
+
+def authenticate(sock):
+    """Perform handshake before starting the streaming loop."""
+    prompt = _recv_line(sock)
+    if prompt != AUTH_PROMPT:
+        print("서버로부터 인증 요청을 받지 못했습니다. 연결을 종료합니다.")
+        return False
+
+    credential_payload = f"{CLIENT_ID}:{CLIENT_PASSWORD}\n".encode("utf-8")
+    sock.sendall(credential_payload)
+
+    response = _recv_line(sock)
+    if response == AUTH_OK:
+        print("서버 인증을 통과했습니다.")
+        return True
+
+    print("서버 인증에 실패했습니다. ID/Password를 확인하세요.")
+    return False
+
+# 서버 IP 주소와 포트
+server_ip = '10.10.16.29'
+server_port = 9999
+
+# 메시지 수신 함수
+def receive_message(sock):
+    while True:
+        try:
+            # 서버로부터 메시지 수신 (예: 1024 바이트 버퍼)
+            message = sock.recv(1024)
+            if not message:
+                print("서버와의 연결이 끊어졌습니다.")
+                break
+            print(f"서버로부터 받은 메시지: {message.decode('utf-8')}")
+        except (socket.error, ConnectionResetError):
+            print("메시지 수신 중 오류가 발생했습니다.")
+            break
+
+# 소켓 생성 및 서버에 연결
+client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+client_socket.connect((server_ip, server_port))
+print(f"서버 {server_ip}:{server_port}에 연결되었습니다.")
+
+if not authenticate(client_socket):
+    client_socket.close()
+    sys.exit(1)
+
+# 메시지 수신을 위한 스레드 시작
+receiver_thread = threading.Thread(target=receive_message, args=(client_socket,))
+receiver_thread.daemon = True # 메인 스레드 종료 시 함께 종료
+receiver_thread.start()
+
+# 웹캠 설정
+cap = cv2.VideoCapture(0) # 0번 웹캠 사용
+if not cap.isOpened():
+    print("웹캠을 열 수 없습니다.")
+    exit()
+
+# 해상도 설정 (선택 사항, 웹캠이 지원하는 해상도로 설정)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1640)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1232)
+
+# FPS 계산을 위한 변수
+fps_start_time = time.time()
+fps_frame_count = 0
+encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 90] # JPEG 품질 설정
+
+# FPS 제한 설정
+target_fps = 10
+frame_interval = 1 / target_fps
+
+try:
+    while True:
+        loop_start_time = time.time()
+
+        ret, frame = cap.read() # 프레임 읽기
+        if not ret:
+            print("프레임을 읽을 수 없습니다. 종료합니다.")
+            break
+
+        # FPS 계산 및 출력
+        #fps_frame_count += 1
+        #if time.time() - fps_start_time >= 1.0:
+        if False:
+            fps = fps_frame_count / (time.time() - fps_start_time)
+            print(f"Client FPS: {fps:.2f}") # 콘솔에 FPS 출력
+            fps_frame_count = 0
+            fps_start_time = time.time()
+
+        # 프레임을 JPEG으로 인코딩
+        result, encoded_frame = cv2.imencode('.jpg', frame, encode_param)
+        data = encoded_frame.tobytes()
+
+        message_size = struct.pack(">L", len(data))
+        
+        try:
+            client_socket.sendall(message_size + data)
+        except socket.error:
+            print("소켓 오류: 연결이 끊겼습니다.")
+            break
+
+        # 프레임 속도 제어
+        elapsed_time = time.time() - loop_start_time
+        if elapsed_time < frame_interval:
+            time.sleep(frame_interval - elapsed_time)
+
+except (ConnectionAbortedError, ConnectionResetError, socket.error) as e:
+    print(f"오류 발생: {e}")
+finally:
+    picam2.stop() # 카메라 중지
+    client_socket.close()
