@@ -466,4 +466,5 @@ $RECYCLE.BIN/
 # Windows shortcuts
 *.lnk
 
+
 # End of https://www.toptal.com/developers/gitignore/api/c,c++,python,windows,linux,venv,visualstudiocode,eclipse,images,video
