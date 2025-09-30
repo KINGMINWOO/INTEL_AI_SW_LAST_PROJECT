@@ -44,7 +44,7 @@ $ git push origin knw(본인 브랜치)
 
 #### 5. 깃허브로 와서 PR(Pull requests)해주세요.
 
-### Reviewer를 팀장(KINGMINWOO)으로 설정해주세요.
+🚩 Reviewer를 팀장(KINGMINWOO)으로 설정해주세요.
 
 #### 6. 추가로 소스코드를 업로드하고 싶으실 때 메인 브랜치 풀(pull) 한번 하고 업로드 해주세요.
 ```
