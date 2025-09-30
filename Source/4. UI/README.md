@@ -1,3 +1,5 @@
-# INTEL_AI_SW_LAST_PROJECT
+# [Intel]AI+SW 아카데미 최종 종합 프로젝트
 
-[Intel]AI+SW 아카데미 최종 종합 프로젝트
+## UI
+
+### 이 폴더에는 Qt를 이용해 제작한 GUI 소스코드가 업로드됩니다.
