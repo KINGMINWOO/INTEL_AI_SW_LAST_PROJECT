@@ -23,7 +23,6 @@
 /* USER CODE BEGIN Includes */
 #include <string.h>
 #include <stdio.h>
-#include "esp.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -33,8 +32,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define ARR_CNT 5
-#define CMD_SIZE 50
+#define RX_BUF_SIZE 256
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -52,12 +50,12 @@ UART_HandleTypeDef huart6;
 /* USER CODE BEGIN PV */
 float temp, humi, ph; // 온도, 습도, PH
 int ec; // EC
-uint8_t rx2char;
-extern cb_data_t cb_data;
-extern volatile unsigned char rx2Flag;
-extern volatile char rx2Data[50];
 volatile int tim3Flag1Sec=1;
 volatile unsigned int tim3Sec;
+char rxBuf[RX_BUF_SIZE];
+volatile uint8_t rx_ch;
+volatile uint8_t rx_idx = 0;
+volatile uint8_t line_received = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -68,20 +66,23 @@ static void MX_USART1_UART_Init(void);
 static void MX_USART6_UART_Init(void);
 static void MX_TIM3_Init(void);
 /* USER CODE BEGIN PFP */
-char strBuff[MAX_ESP_COMMAND_LEN];
 void MX_GPIO_LED_ON(int flag);
 void MX_GPIO_LED_OFF(int flag);
 void esp_event(char *);
+static inline void UART6_RxStart_IT(void)
+{
+	HAL_UART_Receive_IT(&huart6, &rx_ch, 1);
+}
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 /* ======================================= 디버깅용 print ===========================================*/
-//int __io_putchar(int ch) {
-//  uint8_t c = (uint8_t)ch;
-//  HAL_UART_Transmit(&huart2, &c, 1, HAL_MAX_DELAY);
-//  return ch;
-//}
+int __io_putchar(int ch) {
+  uint8_t c = (uint8_t)ch;
+  HAL_UART_Transmit(&huart2, &c, 1, HAL_MAX_DELAY);
+  return ch;
+}
 
 /* =======================================온도, 습도, EC, PH 값 읽어오기============================================== */
 static void ReadTempHumECPH()
@@ -99,8 +100,8 @@ static void ReadTempHumECPH()
 	  ec = (int)((rx_data[7] << 8) | rx_data[8]);
 	  ph = (float)((rx_data[9] << 8) | rx_data[10]) / 10.0;
 
-//	  printf("TEM=%.1f C  HUM=%.1f %%RH  EC=%d us/cm  PH=%.1f\r\n",
-//			  temp, humi, ec, ph);
+	  printf("TEM=%.1f C  HUM=%.1f %%RH  EC=%d us/cm  PH=%.1f\r\n",
+			  temp, humi, ec, ph);
 	}
 }
 /* USER CODE END 0 */
@@ -113,7 +114,7 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-	int ret = 0;
+
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -140,16 +141,10 @@ int main(void)
   MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
   printf("\r\n[BOOT] Soil Sensor demo (USART1=Sensor, USART2=Debug)\r\n");
-  printf("Start main() - wifi\r\n");
-  ret |= drv_uart_init();
-  ret |= drv_esp_init();
-  if(ret != 0)
-  {
-	  printf("Esp response error\r\n");
-	  Error_Handler();
-  }
+  printf("\r\nSTM32 ready (UART6 recv -> printf on UART2)\r\n");
 
-  AiotClient_Init();
+  UART6_RxStart_IT();
+
   if(HAL_TIM_Base_Start_IT(&htim3) != HAL_OK)
   {
 	  Error_Handler();
@@ -160,36 +155,28 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-	  if(strstr((char *)cb_data.buf,"+IPD") && cb_data.buf[cb_data.length-1] == '\n')
+	  if (line_received)
 	  {
-		  //?��?��?���??  \r\n+IPD,15:[KSH_LIN]HELLO\n
-		  strcpy(strBuff,strchr((char *)cb_data.buf,'['));
-		  memset(cb_data.buf,0x0,sizeof(cb_data.buf));
-		  cb_data.length = 0;
-		  esp_event(strBuff);
-	  }
-	  if(rx2Flag)
-	  {
-			printf("recv2 : %s\r\n",rx2Data);
-			rx2Flag =0;
-	//	    HAL_UART_Transmit(&huart6, (uint8_t *)buf, strlen(buf), 0xFFFF);
-	  }
+		  rxBuf[rx_idx] = '\0'; // null-terminate
+		  printf("%s\r\n", rxBuf); // uart6(라즈베리파이)에서 받아온 명령어 출력
 
+		  if (rx_idx < RX_BUF_SIZE - 1)
+		  {
+			  rxBuf[rx_idx++] = '\n';
+		  }
+
+	  	  HAL_UART_Transmit(&huart6, (uint8_t*)rxBuf, rx_idx, HAL_MAX_DELAY);
+
+	  	  rx_idx = 0;
+	      line_received = 0;
+
+	  	  //memset(rxBuf, 0, sizeof(rxBuf));
+	  }
 	  if(tim3Flag1Sec)	//1초에 한번
 	  {
 		  tim3Flag1Sec = 0;
 
 		  ReadTempHumECPH(); // 온도, 습도, EC, PH값 읽기
-
-		  if(!(tim3Sec%10)) //10초에 한번
-		  {
-			  if(esp_get_status() != 0)
-			  {
-				  printf("server connecting ...\r\n");
-				  esp_client_conn();
-			  }
-		  }
-//			printf("tim3Sec : %d\r\n",tim3Sec);
 	  }
     /* USER CODE END WHILE */
 
@@ -371,7 +358,7 @@ static void MX_USART6_UART_Init(void)
 
   /* USER CODE END USART6_Init 1 */
   huart6.Instance = USART6;
-  huart6.Init.BaudRate = 38400;
+  huart6.Init.BaudRate = 115200;
   huart6.Init.WordLength = UART_WORDLENGTH_8B;
   huart6.Init.StopBits = UART_STOPBITS_1;
   huart6.Init.Parity = UART_PARITY_NONE;
@@ -432,58 +419,12 @@ void MX_GPIO_LED_ON(int pin)
 {
 	HAL_GPIO_WritePin(LD2_GPIO_Port, pin, GPIO_PIN_SET);
 }
+
 void MX_GPIO_LED_OFF(int pin)
 {
 	HAL_GPIO_WritePin(LD2_GPIO_Port, pin, GPIO_PIN_RESET);
 }
-void esp_event(char * recvBuf)
-{
-  int i=0;
-  char * pToken;
-  char * pArray[ARR_CNT]={0};
-  char sendBuf[MAX_UART_COMMAND_LEN]={0};
 
-  strBuff[strlen(recvBuf)-1] = '\0';	//'\n' cut
-  printf("\r\nDebug recv : %s\r\n",recvBuf);
-
-  pToken = strtok(recvBuf,"[@]");
-  while(pToken != NULL)
-  {
-    pArray[i] = pToken;
-    if(++i >= ARR_CNT)
-      break;
-    pToken = strtok(NULL,"[@]");
-  }
-
-  if(!strcmp(pArray[1],"LED"))
-  {
-  	if(!strcmp(pArray[2],"ON"))
-  	{
-  		MX_GPIO_LED_ON(LD2_Pin);
-  	}
-	else if(!strcmp(pArray[2],"OFF"))
-	{
-		MX_GPIO_LED_OFF(LD2_Pin);
-	}
-	sprintf(sendBuf,"[%s]%s@%s\n",pArray[0],pArray[1],pArray[2]);
-  }
-  else if(!strncmp(pArray[1]," New conn",8))
-  {
-//	   printf("Debug : %s, %s\r\n",pArray[0],pArray[1]);
-     return;
-  }
-  else if(!strncmp(pArray[1]," Already log",8))
-  {
-// 	    printf("Debug : %s, %s\r\n",pArray[0],pArray[1]);
-	  esp_client_conn();
-      return;
-  }
-  else
-      return;
-
-  esp_send_data(sendBuf);
-  printf("Debug send : %s\r\n",sendBuf);
-}
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)		//1ms 마다 호출
 {
 	static int tim3Cnt = 0;
@@ -494,6 +435,33 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)		//1ms 마다 호출
 		tim3Sec++;
 		tim3Cnt = 0;
 	}
+}
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+	if (huart->Instance == USART6)
+	{
+		if (rx_ch == '\n' || rx_ch == '\r')
+		{
+			line_received = 1;
+		}
+		else
+		{
+			if (rx_idx < RX_BUF_SIZE - 1)
+			{
+				rxBuf[rx_idx++] = rx_ch;
+			}
+		}
+
+		UART6_RxStart_IT(); // 다음 바이트 계속 수신
+	}
+}
+
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+  if (huart->Instance == USART6) {
+    UART6_RxStart_IT();
+  }
 }
 /* USER CODE END 4 */
 
