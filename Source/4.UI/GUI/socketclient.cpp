@@ -4,7 +4,6 @@ SocketClient::SocketClient(QWidget *parent)
     : QWidget{parent}
 {
     pQTcpSocket = new QTcpSocket();
-
     connect(pQTcpSocket, SIGNAL(connected()), this, SLOT(socketConnectServerSlot()));
     connect(pQTcpSocket, SIGNAL(disconnected()), this, SLOT(socketClosedServerSlot()));
     connect(pQTcpSocket, SIGNAL(readyRead()), this, SLOT(socketReadDataSlot()));
