@@ -47,44 +47,47 @@ void Tab1_control::updateDateTime()
 // pPBtemp 클릭 시 처리
 void Tab1_control::on_pPBtemp_clicked()
 {
-    QString msg = "[ROS]Pan@ON";
+    QString msg = "[CCTV1]Pan@ON";
 
-    // 1. 콘솔(터미널) 출력
     qDebug() << "Send message:" << msg;
+    // QMessageBox::information(this, "Debug", "Send message: " + msg);
 
-    // 2. Qt 메시지 박스로 출력
-    QMessageBox::information(this, "Debug", "Send message: " + msg);
-
-    // 3. 실제 서버 연결되면 아래처럼 전송 가능
-    // socket->write(msg.toUtf8());
+    // ✅ 안전 체크: 소켓 없으면 안내하고 종료
+    if (!pSocketClient) {
+        QMessageBox::warning(this, "Socket", "서버와 아직 연결되지 않았습니다.\n연결 후 다시 시도하세요.");
+        return;
+    }
+    pSocketClient->socketWriteDataSlot(msg);
 }
 
+// pPBillu 클릭 시 처리
 void Tab1_control::on_pPBillu_clicked()
 {
-    QString msg = "[ROS]Light@ON";
+    QString msg = "[CCTV1]Light@ON";
 
-    // 1. 콘솔(터미널) 출력
     qDebug() << "Send message:" << msg;
+    // QMessageBox::information(this, "Debug", "Send message: " + msg);
 
-    // 2. Qt 메시지 박스로 출력
-    QMessageBox::information(this, "Debug", "Send message: " + msg);
-
-    // 3. 실제 서버 연결되면 아래처럼 전송 가능
-    // socket->write(msg.toUtf8());
+    // ✅ 안전 체크
+    if (!pSocketClient) {
+        QMessageBox::warning(this, "Socket", "서버와 아직 연결되지 않았습니다.\n연결 후 다시 시도하세요.");
+        return;
+    }
+    pSocketClient->socketWriteDataSlot(msg);
 }
 
-
+// pPBhumi 클릭 시 처리
 void Tab1_control::on_pPBhumi_clicked()
 {
-    QString msg = "[ROS]Water@ON";
+    QString msg = "[CCTV1]Water@ON";
 
-    // 1. 콘솔(터미널) 출력
     qDebug() << "Send message:" << msg;
+    // QMessageBox::information(this, "Debug", "Send message: " + msg);
 
-    // 2. Qt 메시지 박스로 출력
-    QMessageBox::information(this, "Debug", "Send message: " + msg);
-
-    // 3. 실제 서버 연결되면 아래처럼 전송 가능
-    // socket->write(msg.toUtf8());
+    // ✅ 안전 체크
+    if (!pSocketClient) {
+        QMessageBox::warning(this, "Socket", "서버와 아직 연결되지 않았습니다.\n연결 후 다시 시도하세요.");
+        return;
+    }
+    pSocketClient->socketWriteDataSlot(msg);
 }
-

@@ -42,7 +42,7 @@ void Tab4_Camera::on_pPBcam_toggled(bool checked)
         ui->pPBcam->setText("Camera OFF");
 
         // MJPG-Streamer 스트림 열기
-        cap.open("http://<IP>:8080/?action=stream"); // 실제 IP로 변경
+        cap.open("http://10.10.16.60:8080/?action=stream"); // 실제 IP로 변경
         if (cap.isOpened())
             camTimer->start(30); // 30ms마다 갱신
         else

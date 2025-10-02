@@ -1,4 +1,4 @@
-QT       += core gui sql
+QT       += core gui sql widgets network
 
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 
@@ -14,6 +14,7 @@ LIBS += -lopencv_core -lopencv_imgproc -lopencv_highgui -lopencv_videoio -lopenc
 
 SOURCES += \
     main.cpp \
+    socketclient.cpp \
     tab1_control.cpp \
     tab2_cropstatus.cpp \
     tab3_temhumiilludb.cpp \
@@ -21,6 +22,7 @@ SOURCES += \
     tab_widget.cpp
 
 HEADERS += \
+    socketclient.h \
     tab1_control.h \
     tab2_cropstatus.h \
     tab3_temhumiilludb.h \
