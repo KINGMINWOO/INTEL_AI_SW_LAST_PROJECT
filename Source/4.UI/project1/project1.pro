@@ -13,28 +13,28 @@ LIBS += -lopencv_core -lopencv_imgproc -lopencv_highgui -lopencv_videoio -lopenc
 #DEFINES += QT_DISABLE_DEPRECATED_BEFORE=0x060000    # disables all the APIs deprecated before Qt 6.0.0
 
 SOURCES += \
+    changesetting.cpp \
     main.cpp \
+    mainwidget.cpp \
     socketclient.cpp \
-    tab1_control.cpp \
-    tab2_cropstatus.cpp \
-    tab3_temhumiilludb.cpp \
-    tab4_camera.cpp \
-    tab_widget.cpp
+    tab1_button.cpp \
+    tab2_set.cpp \
+    tab3_cctv.cpp
 
 HEADERS += \
+    changesetting.h \
+    mainwidget.h \
     socketclient.h \
-    tab1_control.h \
-    tab2_cropstatus.h \
-    tab3_temhumiilludb.h \
-    tab4_camera.h \
-    tab_widget.h
+    tab1_button.h \
+    tab2_set.h \
+    tab3_cctv.h
 
 FORMS += \
-    tab1_control.ui \
-    tab2_cropstatus.ui \
-    tab3_temhumiilludb.ui \
-    tab4_camera.ui \
-    tab_widget.ui
+    changesetting.ui \
+    mainwidget.ui \
+    tab1_button.ui \
+    tab2_set.ui \
+    tab3_cctv.ui
 
 # Default rules for deployment.
 qnx: target.path = /tmp/$${TARGET}/bin

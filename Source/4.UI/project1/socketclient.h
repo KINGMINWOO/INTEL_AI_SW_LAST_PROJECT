@@ -9,6 +9,7 @@
 #include <QMessageBox>
 
 #define BLOCK_SIZE 1024
+
 class SocketClient : public QWidget
 {
     Q_OBJECT

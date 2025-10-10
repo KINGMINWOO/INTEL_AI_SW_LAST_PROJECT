@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
- <class>Tab4_Camera</class>
- <widget class="QWidget" name="Tab4_Camera">
+ <class>Tab3_cctv</class>
+ <widget class="QWidget" name="Tab3_cctv">
   <property name="geometry">
    <rect>
     <x>0</x>
@@ -19,13 +19,10 @@
      <property name="text">
       <string/>
      </property>
-     <property name="scaledContents">
-      <bool>true</bool>
-     </property>
     </widget>
    </item>
    <item>
-    <layout class="QHBoxLayout" name="horizontalLayout">
+    <layout class="QHBoxLayout" name="horizontalLayout" stretch="9,1">
      <item>
       <widget class="QPushButton" name="pPBcam">
        <property name="text">
@@ -37,9 +34,12 @@
       </widget>
      </item>
      <item>
-      <widget class="QPushButton" name="pPBcapture">
+      <widget class="QPushButton" name="pPBhome">
        <property name="text">
-        <string>Capture</string>
+        <string/>
+       </property>
+       <property name="icon">
+        <iconset theme="QIcon::ThemeIcon::GoHome"/>
        </property>
       </widget>
      </item>
