@@ -8,8 +8,8 @@ import sys
 
 AUTH_PROMPT = "AUTH_REQUEST"
 AUTH_OK = "AUTH_OK"
-CLIENT_ID = "default_user"
-CLIENT_PASSWORD = "default_pass"
+CLIENT_ID = "CCTV2"
+CLIENT_PASSWORD = "CCTV1234"
 
 
 def _recv_line(sock):
@@ -84,8 +84,8 @@ if not cap.isOpened():
     exit()
 
 # 해상도 설정 (선택 사항, 웹캠이 지원하는 해상도로 설정)
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1640)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1232)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2952)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1944)
 
 # FPS 계산을 위한 변수
 fps_start_time = time.time()
@@ -134,5 +134,5 @@ try:
 except (ConnectionAbortedError, ConnectionResetError, socket.error) as e:
     print(f"오류 발생: {e}")
 finally:
-    picam2.stop() # 카메라 중지
+    cap.release()
     client_socket.close()
