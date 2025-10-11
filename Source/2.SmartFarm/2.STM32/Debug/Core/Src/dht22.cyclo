@@ -1,0 +1,10 @@
+../Core/Src/dht22.c:5:10:DWT_Delay_Init	1
+../Core/Src/dht22.c:27:6:DWT_Delay_us	2
+../Core/Src/dht22.c:35:6:Set_Pin_Output	1
+../Core/Src/dht22.c:45:6:Set_Pin_Input	1
+../Core/Src/dht22.c:56:13:DHT22_Start	1
+../Core/Src/dht22.c:70:15:DHT22_Check_Response	4
+../Core/Src/dht22.c:90:16:DHT22_ReadByte	5
+../Core/Src/dht22.c:108:15:DHT22_ReadData	4
+../Core/Src/dht22.c:151:6:DHT22_Init	1
+../Core/Src/dht22.c:159:6:DHT22_ReadPeriodic	3
