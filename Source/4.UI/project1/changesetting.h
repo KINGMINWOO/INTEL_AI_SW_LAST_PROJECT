@@ -9,20 +9,21 @@ class ChangeSetting : public QDialog
 {
     Q_OBJECT
 public:
-    enum class Mode { Temp, Humi, Illu, Air, SoilTemp, SoilHumi, EC, PH };
+    enum class Mode {
+        Temp, Humi, Air,
+        SoilHumi, EC, PH,
+        LED
+    };
 
     explicit ChangeSetting(QWidget *parent = nullptr);
     ~ChangeSetting();
 
-    // 버튼별로 다른 항목 설정
-    void setMode(Mode m, int value, int minVal, int maxVal);
-
-    int  value() const { return m_value; }
-    Mode mode()  const { return m_mode;  }
+    // 숫자 모드: current/min/max 사용, LED 모드: current(0~3)만 사용
+    void setMode(Mode m, int current, int minVal, int maxVal);
 
 signals:
-    void valueChanged(int v);                           // 증감 중 실시간
-    void decided(ChangeSetting::Mode mode, int value);  // OK 눌렀을 때
+    void decided(ChangeSetting::Mode mode, int value); // OK/확인 시 최종 값
+    void valueChanged(int value); // Up/Down 시 실시간 브로드캐스트(옵션)
 
 private slots:
     void onUp();
@@ -30,14 +31,20 @@ private slots:
     void onAccepted();
 
 private:
-    void updateLCD();
-    void clamp();
+    void clamp();        // 숫자 모드 범위 보정
+    void updateView();   // LCD or LED 라벨 업데이트
 
 private:
     Ui::ChangeSetting *ui;
-    Mode m_mode{Mode::Temp};
-    int  m_value{0};
-    int  m_min{0};
-    int  m_max{100};
+    Mode  m_mode { Mode::Temp };
+
+    // 숫자 모드
+    int   m_value { 0 };
+    int   m_min   { 0 };
+    int   m_max   { 100 };
+
+    // LED 모드 전용 (0:OFF, 1:LOW, 2:MID, 3:HIGH)
+    int   m_led   { 0 };
 };
-#endif
+
+#endif // CHANGESETTING_H

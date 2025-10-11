@@ -9,9 +9,6 @@ MainWidget::MainWidget(QWidget *parent)
 
     pSocketClient = new SocketClient(this);
 
-    connect(pSocketClient, SIGNAL(socketRecvDataSig(QString)),
-            this, SLOT(updateRecvDataSlot(QString)));
-
     QTimer::singleShot(0, this, [this](){
         bool askIpPopup = false;
         pSocketClient->connectToServerSlot(askIpPopup);
@@ -25,6 +22,9 @@ MainWidget::MainWidget(QWidget *parent)
 
     pTab3_cctv = new Tab3_cctv(ui->pTab3);
     ui->pTab3->setLayout(pTab3_cctv->layout());
+
+    pTab4_tomato = new Tab4_tomato(ui->pTab4);
+    ui->pTab4->setLayout(pTab4_tomato->layout());
 
     connect(pTab1_button, &Tab1_button::goToTab2, this, [this](){
         ui->stackedWidget->setCurrentWidget(ui->pTab2);
@@ -43,6 +43,15 @@ MainWidget::MainWidget(QWidget *parent)
 
     connect(pTab2_set, &Tab2_set::sendToServer,
             pSocketClient, &SocketClient::socketWriteDataSlot);
+
+    connect(pTab1_button, &Tab1_button::goToTab4, this, [this](){
+        ui->stackedWidget->setCurrentWidget(ui->pTab4);
+    });
+
+    connect(pTab4_tomato, &Tab4_tomato::goToHome, this, [this](){
+        ui->stackedWidget->setCurrentWidget(ui->pTab1);
+    });
+
 }
 
 MainWidget::~MainWidget()

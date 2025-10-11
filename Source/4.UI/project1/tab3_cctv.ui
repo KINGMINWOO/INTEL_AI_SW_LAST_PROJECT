@@ -39,7 +39,8 @@
         <string/>
        </property>
        <property name="icon">
-        <iconset theme="QIcon::ThemeIcon::GoHome"/>
+        <iconset resource="icons.qrc">
+         <normaloff>:/icons/icons/home.png</normaloff>:/icons/icons/home.png</iconset>
        </property>
       </widget>
      </item>
@@ -47,6 +48,8 @@
    </item>
   </layout>
  </widget>
- <resources/>
+ <resources>
+  <include location="icons.qrc"/>
+ </resources>
  <connections/>
 </ui>

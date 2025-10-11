@@ -23,7 +23,7 @@
    <item>
     <spacer name="verticalSpacer">
      <property name="orientation">
-      <enum>Qt::Orientation::Vertical</enum>
+      <enum>Qt::Vertical</enum>
      </property>
      <property name="sizeHint" stdset="0">
       <size>
@@ -36,9 +36,9 @@
    <item>
     <layout class="QHBoxLayout" name="horizontalLayout_2">
      <item>
-      <spacer name="horizontalSpacer">
+      <spacer name="horizontalSpacer_3">
        <property name="orientation">
-        <enum>Qt::Orientation::Horizontal</enum>
+        <enum>Qt::Horizontal</enum>
        </property>
        <property name="sizeHint" stdset="0">
         <size>
@@ -60,10 +60,7 @@
         <bool>true</bool>
        </property>
        <property name="frameShape">
-        <enum>QFrame::Shape::StyledPanel</enum>
-       </property>
-       <property name="frameShadow">
-        <enum>QFrame::Shadow::Raised</enum>
+        <enum>QFrame::NoFrame</enum>
        </property>
        <layout class="QVBoxLayout" name="verticalLayout_2" stretch="0">
         <property name="spacing">
@@ -86,18 +83,43 @@
           <item>
            <layout class="QHBoxLayout" name="horizontalLayout" stretch="9,1">
             <item>
-             <widget class="QLCDNumber" name="set">
-              <property name="sizePolicy">
-               <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
-                <horstretch>0</horstretch>
-                <verstretch>0</verstretch>
-               </sizepolicy>
+             <widget class="QStackedWidget" name="stackedWidget">
+              <property name="currentIndex">
+               <number>1</number>
               </property>
-              <property name="font">
-               <font>
-                <pointsize>20</pointsize>
-               </font>
-              </property>
+              <widget class="QWidget" name="page">
+               <layout class="QVBoxLayout" name="verticalLayout_6">
+                <item>
+                 <widget class="QLCDNumber" name="set">
+                  <property name="sizePolicy">
+                   <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+                    <horstretch>0</horstretch>
+                    <verstretch>0</verstretch>
+                   </sizepolicy>
+                  </property>
+                  <property name="font">
+                   <font>
+                    <pointsize>20</pointsize>
+                   </font>
+                  </property>
+                 </widget>
+                </item>
+               </layout>
+              </widget>
+              <widget class="QWidget" name="page_2">
+               <layout class="QVBoxLayout" name="verticalLayout_5">
+                <item>
+                 <widget class="QLabel" name="pLblLed">
+                  <property name="text">
+                   <string>OFF</string>
+                  </property>
+                  <property name="alignment">
+                   <set>Qt::AlignCenter</set>
+                  </property>
+                 </widget>
+                </item>
+               </layout>
+              </widget>
              </widget>
             </item>
             <item>
@@ -111,7 +133,8 @@
                  <string/>
                 </property>
                 <property name="icon">
-                 <iconset theme="QIcon::ThemeIcon::GoUp"/>
+                 <iconset resource="icons.qrc">
+                  <normaloff>:/icons/icons/up.png</normaloff>:/icons/icons/up.png</iconset>
                 </property>
                </widget>
               </item>
@@ -121,7 +144,8 @@
                  <string/>
                 </property>
                 <property name="icon">
-                 <iconset theme="QIcon::ThemeIcon::GoDown"/>
+                 <iconset resource="icons.qrc">
+                  <normaloff>:/icons/icons/down.png</normaloff>:/icons/icons/down.png</iconset>
                 </property>
                </widget>
               </item>
@@ -143,11 +167,8 @@
               <height>16777215</height>
              </size>
             </property>
-            <property name="orientation">
-             <enum>Qt::Orientation::Horizontal</enum>
-            </property>
             <property name="standardButtons">
-             <set>QDialogButtonBox::StandardButton::Cancel|QDialogButtonBox::StandardButton::Ok</set>
+             <set>QDialogButtonBox::Cancel|QDialogButtonBox::Ok</set>
             </property>
            </widget>
           </item>
@@ -157,9 +178,9 @@
       </widget>
      </item>
      <item>
-      <spacer name="horizontalSpacer_2">
+      <spacer name="horizontalSpacer">
        <property name="orientation">
-        <enum>Qt::Orientation::Horizontal</enum>
+        <enum>Qt::Horizontal</enum>
        </property>
        <property name="sizeHint" stdset="0">
         <size>
@@ -174,7 +195,7 @@
    <item>
     <spacer name="verticalSpacer_2">
      <property name="orientation">
-      <enum>Qt::Orientation::Vertical</enum>
+      <enum>Qt::Vertical</enum>
      </property>
      <property name="sizeHint" stdset="0">
       <size>
@@ -186,7 +207,9 @@
    </item>
   </layout>
  </widget>
- <resources/>
+ <resources>
+  <include location="icons.qrc"/>
+ </resources>
  <connections>
   <connection>
    <sender>buttonBox</sender>

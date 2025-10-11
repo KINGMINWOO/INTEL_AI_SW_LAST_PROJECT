@@ -11,12 +11,13 @@
    </rect>
   </property>
   <property name="windowTitle">
-   <string>MainWidget</string>
+   <string>Smart Farm Application</string>
   </property>
   <layout class="QVBoxLayout" name="verticalLayout">
    <item>
     <widget class="QStackedWidget" name="stackedWidget">
      <widget class="QWidget" name="pTab1"/>
+     <widget class="QWidget" name="pTab4"/>
      <widget class="QWidget" name="pTab3"/>
      <widget class="QWidget" name="pTab2"/>
     </widget>

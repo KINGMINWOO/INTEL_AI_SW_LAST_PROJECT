@@ -14,31 +14,35 @@ public:
     ~Tab2_set();
 
 signals:
-    // 부모(또는 상위 탭/위젯)에서 SocketClient::socketWriteDataSlot(QString)에 연결
     void sendToServer(const QString& msg);
 
 private slots:
+    // 버튼 핸들러
     void on_pPBAtemp_clicked();
     void on_pPBAhumi_clicked();
-    void on_pPBillu_clicked();
     void on_pPBair_clicked();
-    void on_pPBStemp_clicked();
     void on_pPBShumi_clicked();
     void on_pPBec_clicked();
     void on_pPBph_clicked();
+    void on_pPBled_clicked();  // LED 단계 다이얼로그
 
-    void goToHome(); // 기존 연결 유지용
-
-    // ChangeSetting OK 신호 처리
     void onSettingDecided(ChangeSetting::Mode mode, int value);
 
+signals:
+    void goToHome();
+
 private:
+    // 공통
     void openSetting(ChangeSetting::Mode mode, int current, int minVal, int maxVal);
     void showOverlay(ChangeSetting &dlg, QWidget *host = nullptr);
-    QString tagForMode(ChangeSetting::Mode m) const;
+
+    struct Topic { QString domain; QString key; };
+    Topic topicForMode(ChangeSetting::Mode m) const;
 
 private:
     Ui::Tab2_set *ui;
-    ChangeSetting *mChangeDlg { nullptr };   // 단 하나만 공유
+    ChangeSetting *mChangeDlg { nullptr };
+    int m_ledLevel = 0;
 };
-#endif
+
+#endif // TAB2_SET_H

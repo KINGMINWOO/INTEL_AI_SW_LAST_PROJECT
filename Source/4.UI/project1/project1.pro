@@ -1,5 +1,4 @@
 QT       += core gui sql widgets network
-
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 
 CONFIG += c++11
@@ -19,7 +18,8 @@ SOURCES += \
     socketclient.cpp \
     tab1_button.cpp \
     tab2_set.cpp \
-    tab3_cctv.cpp
+    tab3_cctv.cpp \
+    tab4_tomato.cpp
 
 HEADERS += \
     changesetting.h \
@@ -27,16 +27,22 @@ HEADERS += \
     socketclient.h \
     tab1_button.h \
     tab2_set.h \
-    tab3_cctv.h
+    tab3_cctv.h \
+    tab4_tomato.h
 
 FORMS += \
     changesetting.ui \
     mainwidget.ui \
     tab1_button.ui \
     tab2_set.ui \
-    tab3_cctv.ui
+    tab3_cctv.ui \
+    tab4_tomato.ui
 
 # Default rules for deployment.
 qnx: target.path = /tmp/$${TARGET}/bin
 else: unix:!android: target.path = /opt/$${TARGET}/bin
 !isEmpty(target.path): INSTALLS += target
+
+RESOURCES += \
+    fonts.qrc \
+    icons.qrc

@@ -58,6 +58,7 @@ void SocketClient::socketClosedServerSlot()
 }
 void SocketClient::socketWriteDataSlot(QString strData)
 {
+    qDebug() << "[SocketClient] write req:" << strData;
     strData = strData + "\n";
     QByteArray byteData = strData.toLocal8Bit();
     pQTcpSocket->write(byteData);
