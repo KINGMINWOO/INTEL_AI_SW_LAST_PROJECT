@@ -26,12 +26,34 @@ except Exception as nav2_import_error:  # noqa: BLE001
 DETECTION_WINDOW_SECONDS = 3.0
 DETECTION_COUNT_THRESHOLD = 5
 ABS_CENTER_THRESHOLD = 0.05
+POSE_LOG_INTERVAL_SECONDS = 5.0
+YAW_ALIGNMENT_THRESHOLD = 0.02
+
+COMMAND_SPECS: dict[str, dict[str, Optional[float] | tuple[float, float] | str]] = {
+    "ripe@go": {"mode": "manual_offset", "target": (2.0, 0.0), "yaw": None},
+    "ripe@done": {"mode": "nav2", "target": (1.5, 0.5), "yaw": math.pi},
+    "rotten@go": {"mode": "nav2", "target": (1.5, -0.5), "yaw": math.pi * 0.5},
+    "rotten@done": {"mode": "nav2", "target": (-1.5, 0.5), "yaw": math.pi * 1.5},
+    "dump@done": {"mode": "manual_absolute", "target": (0.0, 0.0), "yaw": 0.0},
+}
+
+NAV2_QUEUE_TEMPLATES: dict[str, list[str]] = {
+    "turtle@go": [
+        "ripe@go",
+        "ripe@done",
+        "dump@done",
+        "rotten@go",
+        "rotten@done",
+        "dump@done",
+    ]
+}
 
 # --- 1. 영상 수신 및 객체 탐지 파트 ---
 # YOLOv8 모델 로드
 device = 'cuda' if torch.cuda.is_available() else 'cpu' # CUDA 사용 가능 여부 확인
 #model = YOLO('/home/bbang/Workspace/intel_final/intel_final_project/runs/detect/yolov8x_tomato3/weights/best.pt').to(device) # 모델을 해당 장치로 로드
-model = YOLO('/home/bbang/Workspace/intel_final/intel_final_project/runs/detect/yolov8x_tomato10/weights/best.pt').to(device) # 모델을 해당 장치로 로드
+#model = YOLO('/home/bbang/Workspace/intel_final/intel_final_project/runs/detect/yolov8x_tomato10/weights/best.pt').to(device) # 모델을 해당 장치로 로드
+model = YOLO('best.pt').to(device)
 
 BASE_DIR = Path(__file__).resolve().parent
 CREDENTIAL_FILE = BASE_DIR / "idlist.txt"
@@ -53,6 +75,12 @@ nav2_bridge: Optional["Nav2Bridge"] = None
 nav2_motion_lock = threading.Lock()
 nav2_motion_thread: Optional[threading.Thread] = None
 nav2_active_robot: Optional[str] = None
+
+
+def normalize_angle(angle: float) -> float:
+    """-pi~pi 범위의 각도로 정규화."""
+    wrapped = (angle + math.pi) % (2 * math.pi) - math.pi
+    return wrapped
 
 
 def cancel_nav2_navigation(robot_id: Optional[str] = None, wait: bool = True) -> bool:
@@ -99,6 +127,53 @@ def cancel_nav2_navigation(robot_id: Optional[str] = None, wait: bool = True) ->
     return cancelled
 
 
+def align_robot_heading(robot_id: str, target_yaw: float = 0.0, threshold: float = YAW_ALIGNMENT_THRESHOLD) -> None:
+    """Nav2 Spin 액션을 이용해 헤딩을 보정."""
+    global nav2_active_robot
+
+    if nav2_bridge is None or not hasattr(nav2_bridge, "spin"):
+        return
+
+    with control_lock:
+        state = robot_states.get(robot_id)
+        if state is None:
+            return
+        current_yaw = float(state.get("pose_yaw", 0.0))
+
+    delta = normalize_angle(target_yaw - current_yaw)
+    if abs(delta) <= threshold:
+        print(f"{robot_id} 헤딩 오차 {delta:.3f}rad → 보정 생략.")
+        return
+
+    print(f"{robot_id} 헤딩 보정 시작: 현재 {current_yaw:.3f}rad → 목표 {target_yaw:.3f}rad (회전 {delta:.3f}rad)")
+    with control_lock:
+        state = robot_states.get(robot_id)
+        if state is not None:
+            state["nav2_active"] = True
+            state["nav2_label"] = "yaw_align"
+    nav2_active_robot = robot_id
+
+    try:
+        result: Optional["Nav2Result"] = None
+        try:
+            result = nav2_bridge.spin(delta)  # type: ignore[attr-defined]
+        except Exception as exc:  # noqa: BLE001
+            print(f"{robot_id} 헤딩 보정 실패: {exc}")
+            return
+
+        if result:
+            print(f"{robot_id} 헤딩 보정 결과: {result.message}")
+    finally:
+        with control_lock:
+            state = robot_states.get(robot_id)
+            if state is not None:
+                state["nav2_active"] = False
+                if state.get("nav2_label") == "yaw_align":
+                    state["nav2_label"] = None
+        if nav2_active_robot == robot_id:
+            nav2_active_robot = None
+
+
 def schedule_next_nav2(robot_id: str) -> None:
     upper_id = robot_id.upper()
     next_step = None
@@ -106,19 +181,19 @@ def schedule_next_nav2(robot_id: str) -> None:
         state = robot_states.get(upper_id)
         if state is None:
             return
-        if state.get("nav2_active"):
+        if state.get("nav2_active") or state.get("align_pending"):
             return
         queue = state.setdefault("nav2_queue", [])
         if queue:
             next_step = queue.pop(0)
     if next_step:
-        command, goal, yaw = next_step
-        success, reason = dispatch_move_command(upper_id, command=command, goal=goal, yaw=yaw)
+        command, target, yaw, mode = next_step
+        success, reason = dispatch_move_command(upper_id, command=command, target=target, yaw=yaw, mode=mode)
         if not success:
             print(f"{upper_id} 큐 명령 실행 실패: {reason}")
 
 
-def enqueue_nav2_sequence(robot_id: str, sequence: list[tuple[str, tuple[float, float], float]]) -> None:
+def enqueue_nav2_sequence(robot_id: str, sequence: list[tuple[str, tuple[float, float], Optional[float], str]]) -> None:
     upper_id = robot_id.upper()
     with control_lock:
         state = robot_states.setdefault(
@@ -126,17 +201,25 @@ def enqueue_nav2_sequence(robot_id: str, sequence: list[tuple[str, tuple[float, 
             {
                 "stop_sent": False,
                 "pose": (0.0, 0.0),
+                "pose_yaw": 0.0,
+                "pose_updated_at": 0.0,
                 "nav2_label": None,
                 "nav2_goal": None,
                 "nav2_goal_yaw": 0.0,
                 "nav2_paused_label": None,
                 "nav2_paused_goal": None,
                 "nav2_paused_yaw": None,
+                "nav2_manual_active": False,
                 "nav2_active": False,
+                "align_pending": False,
+                "align_target_yaw": 0.0,
                 "detection_history": {"ripe": [], "rotten": []},
                 "nav2_queue": [],
             },
         )
+        state.setdefault("pose", (0.0, 0.0))
+        state.setdefault("pose_yaw", 0.0)
+        state.setdefault("pose_updated_at", 0.0)
         state["nav2_queue"] = list(sequence)
         state["nav2_paused_label"] = None
         state["nav2_paused_goal"] = None
@@ -146,7 +229,7 @@ def enqueue_nav2_sequence(robot_id: str, sequence: list[tuple[str, tuple[float, 
 
 def start_nav2_navigation(
     robot_id: str,
-    goal_point: tuple[float, float],
+    target_point: tuple[float, float],
     label: Optional[str],
     yaw: Optional[float],
 ) -> tuple[bool, str]:
@@ -167,20 +250,29 @@ def start_nav2_navigation(
             {
                 "stop_sent": False,
                 "pose": (0.0, 0.0),
+                "pose_yaw": 0.0,
+                "pose_updated_at": 0.0,
                 "nav2_label": None,
                 "nav2_goal": None,
                 "nav2_goal_yaw": 0.0,
                 "nav2_paused_label": None,
                 "nav2_paused_goal": None,
                 "nav2_paused_yaw": None,
+                "nav2_manual_active": False,
                 "nav2_active": False,
+                "align_pending": False,
+                "align_target_yaw": 0.0,
                 "detection_history": {"ripe": [], "rotten": []},
                 "nav2_queue": [],
             },
         )
+        state.setdefault("pose", (0.0, 0.0))
+        state.setdefault("pose_yaw", 0.0)
+        state.setdefault("pose_updated_at", 0.0)
         state["nav2_active"] = True
+        state["nav2_manual_active"] = False
         state["nav2_label"] = label
-        state["nav2_goal"] = goal_point
+        state["nav2_goal"] = target_point
         state["nav2_goal_yaw"] = yaw_value
         state["nav2_paused_label"] = None
         state["nav2_paused_goal"] = None
@@ -197,11 +289,11 @@ def start_nav2_navigation(
         result: Optional[Nav2Result] = None
         try:
             result = nav2_bridge.navigate(
-                goal_point[0],
-                goal_point[1],
+                target_point[0],
+                target_point[1],
                 yaw=yaw_value,
             )
-            print(f"Nav2 목표 ({goal_point[0]:.2f}, {goal_point[1]:.2f}) 결과: {result.message}")
+            print(f"Nav2 목표 ({target_point[0]:.2f}, {target_point[1]:.2f}) 결과: {result.message}")
         except Exception as exc:  # noqa: BLE001
             print(f"Nav2 이동 중 예외 발생: {exc}")
             result = Nav2Result(False, -1, str(exc))
@@ -219,6 +311,8 @@ def start_nav2_navigation(
                 if nav2_motion_thread is threading.current_thread():
                     nav2_motion_thread = None
             if result and result.success:
+                if label == "dump@done":
+                    align_robot_heading(upper_id, target_yaw=0.0)
                 schedule_next_nav2(upper_id)
 
     worker = threading.Thread(target=_worker, daemon=True)
@@ -243,6 +337,31 @@ def send_stop_to_robot(target_id: str) -> None:
                 state["stop_sent"] = True
     except OSError as exc:  # noqa: BLE001
         print(f"{upper_id} STOP 명령 전송 실패: {exc}")
+
+
+def send_align_command(target_id: str, yaw: float) -> None:
+    upper_id = target_id.upper()
+    with control_lock:
+        target_conn = robot_clients.get(upper_id)
+    if not target_conn:
+        print(f"{upper_id} 정렬 명령을 전송할 로봇 연결을 찾을 수 없습니다.")
+        with control_lock:
+            state = robot_states.get(upper_id)
+            if state is not None:
+                state["align_pending"] = False
+        schedule_next_nav2(upper_id)
+        return
+    message = f"ALIGN:{yaw:.3f}\n".encode("utf-8")
+    try:
+        target_conn.sendall(message)
+        print(f"{upper_id} 정렬 명령 전송: {message.decode().strip()}")
+    except OSError as exc:
+        print(f"{upper_id} 정렬 명령 전송 실패: {exc}")
+        with control_lock:
+            state = robot_states.get(upper_id)
+            if state is not None:
+                state["align_pending"] = False
+        schedule_next_nav2(upper_id)
 
 
 def should_trigger_auto_stop(robot_id: str, category: str, x_center_norm: float) -> bool:
@@ -280,6 +399,9 @@ def should_trigger_auto_stop(robot_id: str, category: str, x_center_norm: float)
 
 def resume_nav2_for_robot(robot_id: str) -> bool:
     upper_id = robot_id.upper()
+    label: Optional[str]
+    goal: Optional[tuple[float, float]]
+    yaw: Optional[float]
     with control_lock:
         state = robot_states.get(upper_id)
         if state is None:
@@ -289,16 +411,80 @@ def resume_nav2_for_robot(robot_id: str) -> bool:
         yaw = state.get("nav2_paused_yaw")
         if not label or goal is None:
             return False
-        state["nav2_paused_label"] = None
-        state["nav2_paused_goal"] = None
-        state["nav2_paused_yaw"] = None
 
-    success, status = dispatch_move_command(upper_id, command=label, goal=goal, yaw=yaw)
+    spec = COMMAND_SPECS.get(label, {})
+    mode = spec.get("mode", "nav2") if isinstance(spec, dict) else "nav2"
+    yaw_to_use = yaw if yaw is not None else (spec.get("yaw") if isinstance(spec, dict) else None)
+
+    success, status = dispatch_move_command(
+        upper_id,
+        command=label,
+        target=goal,
+        yaw=yaw_to_use if isinstance(yaw_to_use, (int, float)) else None,
+        mode=str(mode),
+    )
     if success:
+        with control_lock:
+            state = robot_states.get(upper_id)
+            if state is not None:
+                state["nav2_paused_label"] = None
+                state["nav2_paused_goal"] = None
+                state["nav2_paused_yaw"] = None
         print(f"{upper_id} Nav2 재개: {label} → ({goal[0]:.2f}, {goal[1]:.2f})")
     else:
+        with control_lock:
+            state = robot_states.get(upper_id)
+            if state is not None:
+                state["nav2_paused_label"] = label
+                state["nav2_paused_goal"] = goal
+                state["nav2_paused_yaw"] = yaw
         print(f"{upper_id} Nav2 재개 실패: {status}")
     return success
+
+
+def complete_manual_move(robot_id: str) -> bool:
+    """수동 이동(직진 등)이 종료되었을 때 상태를 정리."""
+    global nav2_active_robot
+
+    upper_id = robot_id.upper()
+    align_required = False
+    target_yaw = 0.0
+    label: Optional[str] = None
+    with control_lock:
+        state = robot_states.get(upper_id)
+        if state and state.get("nav2_manual_active"):
+            state["nav2_manual_active"] = False
+            state["nav2_active"] = False
+            state["nav2_paused_label"] = None
+            state["nav2_paused_goal"] = None
+            state["nav2_paused_yaw"] = None
+            history = state.setdefault("detection_history", {"ripe": [], "rotten": []})
+            for buf in history.values():
+                buf.clear()
+            state["stop_sent"] = False
+            label = state.get("nav2_label")
+            if label == "dump@done":
+                align_required = True
+                target_yaw = 0.0
+                state["align_pending"] = True
+                state["align_target_yaw"] = target_yaw
+            else:
+                state["nav2_label"] = None
+                state["nav2_goal"] = None
+                state["nav2_goal_yaw"] = 0.0
+            if nav2_active_robot == upper_id:
+                nav2_active_robot = None
+        else:
+            return False
+
+    if align_required:
+        send_align_command(upper_id, target_yaw)
+    else:
+        if nav2_active_robot == upper_id:
+            nav2_active_robot = None
+        print(f"{upper_id} 수동 이동 완료: 큐 다음 단계로 진행")
+        schedule_next_nav2(upper_id)
+    return True
 
 
 def load_credentials():
@@ -403,17 +589,28 @@ def handle_client(conn, addr, client_id, prefetched_data=b""):
                 {
                     "stop_sent": False,
                     "pose": (0.0, 0.0),
+                    "pose_yaw": 0.0,
+                    "pose_updated_at": 0.0,
                     "nav2_label": None,
                     "nav2_goal": None,
                     "nav2_goal_yaw": 0.0,
                     "nav2_paused_label": None,
                     "nav2_paused_goal": None,
                     "nav2_paused_yaw": None,
+                    "nav2_manual_active": False,
                     "nav2_active": False,
+                    "align_pending": False,
+                    "align_target_yaw": 0.0,
                     "detection_history": {"ripe": [], "rotten": []},
                     "nav2_queue": [],
                 },
             )
+            state = robot_states[client_id.upper()]
+            state.setdefault("pose", (0.0, 0.0))
+            state.setdefault("pose_yaw", 0.0)
+            state.setdefault("pose_updated_at", 0.0)
+            state.setdefault("align_pending", False)
+            state.setdefault("align_target_yaw", 0.0)
 
     data = prefetched_data
     payload_size = struct.calcsize(">L")
@@ -449,8 +646,12 @@ def handle_client(conn, addr, client_id, prefetched_data=b""):
                 if control_line.startswith("POSE:") and is_robot:
                     try:
                         _, pose_payload = control_line.split(":", 1)
-                        x_str, y_str = pose_payload.split(",", 1)
-                        pose = (float(x_str), float(y_str))
+                        parts = [p.strip() for p in pose_payload.split(",")]
+                        if len(parts) < 2:
+                            raise ValueError
+                        x_val = float(parts[0])
+                        y_val = float(parts[1])
+                        yaw_val = float(parts[2]) if len(parts) >= 3 else None
                     except ValueError:
                         print(f"{client_id} 잘못된 POSE 메시지: {control_line}")
                         continue
@@ -459,22 +660,54 @@ def handle_client(conn, addr, client_id, prefetched_data=b""):
                             client_id.upper(),
                             {
                                 "stop_sent": False,
-                                "pose": pose,
+                                "pose": (x_val, y_val),
+                                "pose_yaw": 0.0 if yaw_val is None else yaw_val,
+                                "pose_updated_at": time.monotonic(),
                                 "nav2_label": None,
                                 "nav2_goal": None,
                                 "nav2_goal_yaw": 0.0,
                                 "nav2_paused_label": None,
                                 "nav2_paused_goal": None,
                                 "nav2_paused_yaw": None,
+                                "nav2_manual_active": False,
                                 "nav2_active": False,
+                                "align_pending": False,
+                                "align_target_yaw": 0.0,
                                 "detection_history": {"ripe": [], "rotten": []},
                                 "nav2_queue": [],
                             },
                         )
-                        state["pose"] = pose
+                        state.setdefault("pose", (0.0, 0.0))
+                        state.setdefault("pose_yaw", 0.0)
+                        state.setdefault("pose_updated_at", 0.0)
+                        state["pose"] = (x_val, y_val)
+                        if yaw_val is not None:
+                            state["pose_yaw"] = yaw_val
+                        state["pose_updated_at"] = time.monotonic()
                     continue
-                if control_line.lower() == "robot@done" and is_robot:
-                    resume_nav2_for_robot(client_id.upper())
+                lowered = control_line.lower()
+                if lowered == "move@done" and is_robot:
+                    complete_manual_move(client_id.upper())
+                    continue
+                if lowered == "align@done" and is_robot:
+                    with control_lock:
+                        state = robot_states.get(client_id.upper())
+                        if state is not None:
+                            state["align_pending"] = False
+                            state["nav2_label"] = None
+                            state["nav2_goal"] = None
+                            state["nav2_goal_yaw"] = 0.0
+                            state["stop_sent"] = False
+                            history = state.setdefault("detection_history", {"ripe": [], "rotten": []})
+                            for buf in history.values():
+                                buf.clear()
+                    if nav2_active_robot == client_id.upper():
+                        nav2_active_robot = None
+                    schedule_next_nav2(client_id.upper())
+                    continue
+                if lowered == "robot@done" and is_robot:
+                    if not resume_nav2_for_robot(client_id.upper()):
+                        complete_manual_move(client_id.upper())
                     continue
                 else:
                     print(f"{client_id} 제어 메시지 수신: {control_line}")
@@ -598,56 +831,96 @@ def dispatch_move_command(
     target_id: str,
     command: Optional[str] = None,
     origin: tuple[float, float] = (0.0, 0.0),
-    goal: tuple[float, float] = (0.0, 1.5),
+    target: Optional[tuple[float, float]] = None,
     yaw: Optional[float] = None,
+    mode: str = "nav2",
 ):
     """TURTLEBOT 클라이언트로 이동 명령을 전송하거나 Nav2에 목표를 전달."""
-    global nav2_bridge
+    global nav2_bridge, nav2_active_robot
 
     upper_id = target_id.upper()
+    use_nav2 = mode == "nav2"
 
-    if nav2_bridge is not None and Nav2Result is not None:
-        success, status = start_nav2_navigation(upper_id, goal, command, yaw)
+    if use_nav2 and nav2_bridge is not None and Nav2Result is not None:
+        goal_point = target if target is not None else origin
+        success, status = start_nav2_navigation(upper_id, goal_point, command, yaw)
         return success, status
+
+    pose = origin
+    pose_yaw = 0.0
+    goal_world = target if target is not None else origin
 
     with control_lock:
         target_conn = robot_clients.get(upper_id)
-        pose = None
+        state = None
         if target_conn:
             state = robot_states.setdefault(
                 upper_id,
                 {
                     "stop_sent": False,
                     "pose": (0.0, 0.0),
+                    "pose_yaw": 0.0,
+                    "pose_updated_at": 0.0,
                     "nav2_label": None,
                     "nav2_goal": None,
                     "nav2_goal_yaw": 0.0,
                     "nav2_paused_label": None,
-                    "nav2_paused_goal": None,
-                    "nav2_paused_yaw": None,
-                    "nav2_active": False,
-                    "detection_history": {"ripe": [], "rotten": []},
-                    "nav2_queue": [],
-                },
-            )
-            state["stop_sent"] = False
-            state["nav2_label"] = command
-            state["nav2_goal"] = goal
-            state["nav2_goal_yaw"] = float(yaw) if yaw is not None else 0.0
-            state["nav2_paused_label"] = None
-            state["nav2_paused_goal"] = None
-            state["nav2_paused_yaw"] = None
-            pose = state.get("pose")
+                "nav2_paused_goal": None,
+                "nav2_paused_yaw": None,
+                "nav2_manual_active": False,
+                "nav2_active": False,
+                "align_pending": False,
+                "align_target_yaw": 0.0,
+                "detection_history": {"ripe": [], "rotten": []},
+                "nav2_queue": [],
+            },
+        )
+            state.setdefault("pose", (0.0, 0.0))
+            state.setdefault("pose_yaw", 0.0)
+            state.setdefault("pose_updated_at", 0.0)
+        pose = state.get("pose") or origin
+        pose_yaw = float(state.get("pose_yaw", 0.0))
+        state["stop_sent"] = False
+        state["nav2_label"] = command
+        state["nav2_goal_yaw"] = float(yaw) if yaw is not None else 0.0
+        state["nav2_paused_label"] = None
+        state["nav2_paused_goal"] = None
+        state["nav2_paused_yaw"] = None
+        state["align_pending"] = False
+        history = state.setdefault("detection_history", {"ripe": [], "rotten": []})
+            for buf in history.values():
+                buf.clear()
+
+            if mode == "manual_offset":
+                dx, dy = target if target is not None else (0.0, 0.0)
+                goal_world = (
+                    pose[0] + dx * math.cos(pose_yaw) - dy * math.sin(pose_yaw),
+                    pose[1] + dx * math.sin(pose_yaw) + dy * math.cos(pose_yaw),
+                )
+            else:
+                goal_world = target if target is not None else pose
+
+            state["nav2_goal"] = goal_world
+            state["nav2_active"] = True
+            state["nav2_manual_active"] = mode != "nav2"
+
     if target_conn is None:
         return False, "TARGET_NOT_CONNECTED"
-    start = pose if pose is not None else origin
-    message = f"MOVE:{start[0]:.2f},{start[1]:.2f}->{goal[0]:.2f},{goal[1]:.2f}\n"
+
+    message = f"MOVE:{pose[0]:.2f},{pose[1]:.2f}->{goal_world[0]:.2f},{goal_world[1]:.2f}\n"
     try:
         target_conn.sendall(message.encode("utf-8"))
         print(f"{target_id} 에게 명령 전송: {message.strip()}")
+        if mode != "nav2":
+            nav2_active_robot = upper_id
         return True, "OK"
     except OSError as exc:
         print(f"{target_id} 명령 전송 실패: {exc}")
+        with control_lock:
+            state = robot_states.get(upper_id)
+            if state is not None:
+                state["nav2_active"] = False
+                state["nav2_manual_active"] = False
         return False, "SEND_FAILED"
 
 
@@ -656,6 +929,7 @@ def handle_user_client(conn, addr, client_id, prefetched_data=b""):
     print(f"사용자 채널 {addr} 접속 (ID: {client_id})")
     suffix = client_id.upper()[4:] if len(client_id) >= 4 else ""
     target_id = f"TURTLE{suffix}" if suffix else None
+    command_specs = COMMAND_SPECS
     buffer = bytearray(prefetched_data)
     try:
         while True:
@@ -673,41 +947,42 @@ def handle_user_client(conn, addr, client_id, prefetched_data=b""):
                 continue
             print(f"[{client_id}] 수신: {message}")
             command = message.lower()
-            goal_map = {
-                "ripe@go": ((1.5, -0.5), math.pi * 0.5),
-                "ripe@done": ((1.5, 0.5), math.pi),
-                "rotten@go": ((1.5, -0.5), math.pi * 0.5),
-                "rotten@done": ((-1.5, 0.5), math.pi * 1.5),
-                "dump@done": ((-1.5, -0.5), 0.0),
-            }
-            nav2_queue_templates = {
-                "turtle@go": [
-                    "ripe@go",
-                    "ripe@done",
-                    "dump@done",
-                    "rotten@go",
-                    "rotten@done",
-                    "dump@done",
-                ]
-            }
-
-            if command in goal_map:
+            spec = command_specs.get(command)
+            if spec:
                 if not target_id:
                     conn.sendall(b"ERROR:TARGET_UNKNOWN\n")
                     continue
-                goal, yaw = goal_map[command]
-                success, reason = dispatch_move_command(target_id, command=command, goal=goal, yaw=yaw)
+                cancel_nav2_navigation(target_id, wait=True)
+                mode = spec.get("mode", "nav2")
+                target = spec.get("target", (0.0, 0.0))
+                yaw_value = spec.get("yaw")
+                success, reason = dispatch_move_command(
+                    target_id,
+                    command=command,
+                    target=target,
+                    yaw=yaw_value,
+                    mode=mode,
+                )
                 response = b"CMD_OK\n" if success else f"ERROR:{reason}\n".encode("utf-8")
                 conn.sendall(response)
-            elif command in nav2_queue_templates:
+            elif command in NAV2_QUEUE_TEMPLATES:
                 if not target_id:
                     conn.sendall(b"ERROR:TARGET_UNKNOWN\n")
                     continue
                 cancel_nav2_navigation(target_id, wait=True)
                 sequence = []
-                for step in nav2_queue_templates[command]:
-                    goal, yaw = goal_map.get(step, ((0.0, 0.0), 0.0))
-                    sequence.append((step, goal, yaw))
+                for step in NAV2_QUEUE_TEMPLATES[command]:
+                    step_spec = command_specs.get(step)
+                    if not step_spec:
+                        continue
+                    sequence.append(
+                        (
+                            step,
+                            step_spec.get("target", (0.0, 0.0)),
+                            step_spec.get("yaw"),
+                            step_spec.get("mode", "nav2"),
+                        )
+                    )
                 enqueue_nav2_sequence(target_id, sequence)
                 conn.sendall(b"CMD_OK\n")
             elif command == "stop":
@@ -756,6 +1031,39 @@ def start_socket_server():
         thread.daemon = True
         thread.start()
 
+
+def pose_debug_worker() -> None:
+    """주기적으로 각 로봇의 최신 오도메트리를 출력."""
+    while True:
+        time.sleep(POSE_LOG_INTERVAL_SECONDS)
+        with control_lock:
+            snapshot = {
+                robot_id: (
+                    state.get("pose"),
+                    state.get("pose_yaw"),
+                    state.get("pose_updated_at", 0.0),
+                )
+                for robot_id, state in robot_states.items()
+            }
+        if not snapshot:
+            continue
+        now = time.monotonic()
+        for robot_id, (pose, yaw, updated_at) in snapshot.items():
+            if pose is None:
+                continue
+            if updated_at:
+                age = now - updated_at
+                print(
+                    f"[POSE_DEBUG] {robot_id}: x={pose[0]:.3f}, y={pose[1]:.3f}, yaw={yaw:.3f} "
+                    f"(업데이트 {age:.1f}초 전)"
+                )
+            else:
+                print(
+                    f"[POSE_DEBUG] {robot_id}: x={pose[0]:.3f}, y={pose[1]:.3f}, yaw={yaw:.3f} "
+                    "(업데이트 기록 없음)"
+                )
+
+
 # --- 2. Flask 웹 스트리밍 파트 ---
 app = Flask(__name__)
 
@@ -799,6 +1107,9 @@ if __name__ == '__main__':
     socket_thread = threading.Thread(target=start_socket_server)
     socket_thread.daemon = True
     socket_thread.start()
+
+    pose_thread = threading.Thread(target=pose_debug_worker, daemon=True)
+    pose_thread.start()
 
     # Flask 앱 실행
     app.run(host='0.0.0.0', port=5000, debug=False)

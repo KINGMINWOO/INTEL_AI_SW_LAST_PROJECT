@@ -1,5 +1,6 @@
-"""TurtleBot 전용 스트리밍 클라이언트 (ROS2 제어 제거 버전)."""
+"""TurtleBot 전용 스트리밍 클라이언트 (ROS2 오도메트리 전송 포함)."""
 
+import math
 import socket
 import struct
 import sys
@@ -9,26 +10,319 @@ from typing import Optional, Tuple
 
 import cv2
 
+try:
+    import rclpy
+    from geometry_msgs.msg import Twist
+    from nav_msgs.msg import Odometry
+    from rclpy.node import Node
+except ImportError:  # noqa: F401
+    rclpy = None  # type: ignore
+    Odometry = None  # type: ignore
+    Node = None  # type: ignore
+    Twist = None  # type: ignore
+
 AUTH_PROMPT = "AUTH_REQUEST"
 AUTH_OK = "AUTH_OK"
 CLIENT_ID = "TURTLE01"
 CLIENT_PASSWORD = "TURTLE1234"
 
-SERVER_ADDR: Tuple[str, int] = ("10.10.16.36", 9999)
-FRAME_SIZE = (1280, 720)  # (width, height)
-TARGET_FPS = 30          # 0 => no sleep, otherwise throttle
+SERVER_ADDR: Tuple[str, int] = ("10.10.16.29", 9999)
+FRAME_SIZE = (640, 480)  # (width, height)
+TARGET_FPS = 10          # 0 => no sleep, otherwise throttle
 JPEG_QUALITY = 85
+ODOM_TOPIC = "/odom"
+POSE_SEND_INTERVAL = 0.2  # seconds
+CAMERA_FAILURE_LIMIT = 5
+CAMERA_FORMAT_CANDIDATES = ["MJPG", "YUYV", "YUY2", "UYVY", "NV12", "YU12"]
+YAW_TOLERANCE = 0.02
+ANGULAR_KP = 1.5
+MAX_ANGULAR_SPEED = 0.9
+
+
+def quaternion_to_yaw(w: float, x: float, y: float, z: float) -> float:
+    """geometry_msgs/Quaternion → yaw(라디안) 변환."""
+    siny_cosp = 2.0 * (w * z + x * y)
+    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+    return math.atan2(siny_cosp, cosy_cosp)
+
+
+def decode_fourcc(value: float) -> str:
+    """OpenCV 반환 값을 FOURCC 문자열로 변환."""
+    code = int(value)
+    chars = [chr((code >> (8 * i)) & 0xFF) for i in range(4)]
+    result = "".join(chars)
+    return result if result.strip("\x00") else "----"
+
+
+def try_set_fourcc(cap: cv2.VideoCapture, fourcc: str) -> bool:
+    """지정한 FOURCC를 설정하고 실제 적용 여부를 확인."""
+    code = cv2.VideoWriter_fourcc(*fourcc)
+    if not cap.set(cv2.CAP_PROP_FOURCC, code):
+        return False
+    applied = decode_fourcc(cap.get(cv2.CAP_PROP_FOURCC))
+    return applied == fourcc
+
+
+def normalize_angle(angle: float) -> float:
+    return (angle + math.pi) % (2 * math.pi) - math.pi
+
+
+class OdometryBridge:
+    """ROS2 오도메트리를 구독하고 cmd_vel을 발행하는 간단한 브리지."""
+
+    def __init__(self, odom_topic: str = ODOM_TOPIC, cmd_vel_topic: str = "/cmd_vel") -> None:
+        self.odom_topic = odom_topic
+        self.cmd_vel_topic = cmd_vel_topic
+        self._lock = threading.Lock()
+        self._latest: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+        self._has_pose = False
+        self._origin: Optional[Tuple[float, float]] = None
+        self._thread: Optional[threading.Thread] = None
+        self._running = False
+        self._node: Optional["OdometryBridge._OdomNode"] = None
+        self._owns_context = False
+
+    class _OdomNode(Node):
+        def __init__(self, parent: "OdometryBridge", odom_topic: str, cmd_vel_topic: str) -> None:
+            super().__init__("turtle_client_odom_bridge")
+            self._parent = parent
+            self._cmd_pub = self.create_publisher(Twist, cmd_vel_topic, 10)
+            self.create_subscription(Odometry, odom_topic, self._odom_callback, 10)
+
+        def _odom_callback(self, msg: Odometry) -> None:
+            pose = msg.pose.pose
+            self._parent._set_pose(
+                float(pose.position.x),
+                float(pose.position.y),
+                quaternion_to_yaw(pose.orientation.w, pose.orientation.x, pose.orientation.y, pose.orientation.z),
+            )
+
+        def publish_velocity(self, linear_x: float, angular_z: float) -> None:
+            twist = Twist()
+            twist.linear.x = linear_x
+            twist.angular.z = angular_z
+            self._cmd_pub.publish(twist)
+
+    def start(self) -> bool:
+        if rclpy is None or Node is None or Odometry is None or Twist is None:
+            print("rclpy 패키지를 찾을 수 없어 오도메트리 구독을 건너뜁니다.")
+            return False
+        if self._running:
+            return True
+        try:
+            if not rclpy.ok():
+                rclpy.init(args=None)
+                self._owns_context = True
+            else:
+                self._owns_context = False
+            self._node = self._OdomNode(self, self.odom_topic, self.cmd_vel_topic)
+            self._running = True
+            self._thread = threading.Thread(target=self._spin, daemon=True)
+            self._thread.start()
+            print(f"ROS2 오도메트리 구독을 시작합니다: {self.odom_topic}")
+            return True
+        except Exception as exc:  # noqa: BLE001
+            print(f"오도메트리 브리지 초기화 실패: {exc}")
+            self.stop()
+            return False
+
+    def _spin(self) -> None:
+        try:
+            while self._running and rclpy.ok():
+                rclpy.spin_once(self._node, timeout_sec=0.1)
+        finally:
+            if self._node is not None:
+                try:
+                    self._node.destroy_node()
+                except Exception:  # noqa: BLE001
+                    pass
+                self._node = None
+            if self._owns_context and rclpy is not None and rclpy.ok():
+                try:
+                    rclpy.shutdown()
+                except Exception:  # noqa: BLE001
+                    pass
+            self._owns_context = False
+            self._running = False
+
+    def stop(self) -> None:
+        if not self._running:
+            return
+        self._running = False
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout=1.0)
+        self._thread = None
+
+    def _set_pose(self, x: float, y: float, yaw: float) -> None:
+        with self._lock:
+            if self._origin is None:
+                self._origin = (x, y)
+            self._latest = (x, y, yaw)
+            self._has_pose = True
+
+    def get_pose(self, *, relative: bool = False) -> Tuple[float, float, float]:
+        with self._lock:
+            x, y, yaw = self._latest
+            if relative and self._origin is not None:
+                ox, oy = self._origin
+                return (x - ox, y - oy, yaw)
+            return (x, y, yaw)
+
+    def has_pose(self) -> bool:
+        with self._lock:
+            return self._has_pose
+
+    def send_velocity(self, linear_x: float, angular_z: float) -> None:
+        if self._node is None:
+            return
+        self._node.publish_velocity(linear_x, angular_z)
+
+    def to_world(self, point: Tuple[float, float]) -> Tuple[float, float]:
+        with self._lock:
+            if self._origin is None:
+                return point
+            ox, oy = self._origin
+        return (point[0] + ox, point[1] + oy)
+
+    def to_relative(self, x: float, y: float) -> Tuple[float, float]:
+        with self._lock:
+            if self._origin is None:
+                return (x, y)
+            ox, oy = self._origin
+        return (x - ox, y - oy)
+
+
+class MotionController:
+    """간단한 직선 이동을 수행하는 제어기."""
+
+    def __init__(self, bridge: OdometryBridge, notify_cb) -> None:
+        self._bridge = bridge
+        self._notify_cb = notify_cb
+        self._target: Optional[Tuple[float, float]] = None
+        self._rotation_target: Optional[float] = None
+        self._lock = threading.Lock()
+        self._cancel_requested = False
+        self._running = True
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def move_to(self, target: Tuple[float, float]) -> None:
+        if not self._bridge.start():
+            print("ROS2 브리지를 시작할 수 없어 이동 명령을 건너뜁니다.")
+            return
+        with self._lock:
+            self._target = target
+            self._rotation_target = None
+            self._cancel_requested = False
+        rel = self._bridge.to_relative(target[0], target[1])
+        print(f"[모션] 목표 좌표 world({target[0]:.2f}, {target[1]:.2f}) / rel({rel[0]:.2f}, {rel[1]:.2f}) 이동 시작")
+
+    def align_to(self, target_yaw: float) -> None:
+        if not self._bridge.start():
+            print("ROS2 브리지를 시작할 수 없어 정렬 명령을 건너뜁니다.")
+            return
+        target_yaw = normalize_angle(target_yaw)
+        with self._lock:
+            self._target = None
+            self._rotation_target = target_yaw
+            self._cancel_requested = False
+        print(f"[모션] yaw {target_yaw:.3f}rad 정렬 시작")
+
+    def cancel(self) -> None:
+        with self._lock:
+            self._target = None
+            self._rotation_target = None
+            self._cancel_requested = True
+        self._bridge.send_velocity(0.0, 0.0)
+        print("[모션] 이동 취소 및 정지")
+
+    def stop(self) -> None:
+        self._running = False
+        self.cancel()
+        self._thread.join(timeout=1.0)
+
+    def _loop(self) -> None:
+        kp = 0.8
+        max_speed = 0.35
+        min_speed = 0.05
+        goal_tolerance = 0.03
+        lateral_tolerance = 0.1
+
+        while self._running:
+            with self._lock:
+                target = self._target
+                rotation_target = self._rotation_target
+                cancelled = self._cancel_requested
+
+            if cancelled or (target is None and rotation_target is None):
+                time.sleep(0.05)
+                continue
+
+            if not self._bridge.has_pose():
+                self._bridge.send_velocity(0.0, 0.0)
+                time.sleep(0.05)
+                continue
+
+            x, y, yaw = self._bridge.get_pose()
+
+            if rotation_target is not None:
+                error = normalize_angle(rotation_target - yaw)
+                if abs(error) <= YAW_TOLERANCE:
+                    self._bridge.send_velocity(0.0, 0.0)
+                    with self._lock:
+                        self._rotation_target = None
+                        self._cancel_requested = False
+                    self._notify_cb("align@done")
+                    time.sleep(0.05)
+                    continue
+
+                angular = max(-MAX_ANGULAR_SPEED, min(MAX_ANGULAR_SPEED, ANGULAR_KP * error))
+                self._bridge.send_velocity(0.0, angular)
+                time.sleep(0.05)
+                continue
+            dx = target[0] - x
+            dy = target[1] - y
+            distance = math.hypot(dx, dy)
+            forward = dx * math.cos(yaw) + dy * math.sin(yaw)
+            lateral = -dx * math.sin(yaw) + dy * math.cos(yaw)
+
+            if distance <= goal_tolerance or forward <= 0.0:
+                self._bridge.send_velocity(0.0, 0.0)
+                with self._lock:
+                    self._target = None
+                    self._cancel_requested = False
+                self._notify_cb("move@done")
+                time.sleep(0.05)
+                continue
+
+            if abs(lateral) > lateral_tolerance:
+                print(f"[모션] 좌우 오차 {lateral:.3f}m (yaw={yaw:.3f})")
+
+            speed = kp * forward
+            speed = max(min(speed, max_speed), min_speed)
+            self._bridge.send_velocity(speed, 0.0)
+            time.sleep(0.05)
 
 
 def configure_capture() -> Tuple[cv2.VideoCapture, float]:
-    """카메라를 MJPG 저지연 모드로 설정하고 센서 FPS를 반환."""
+    """카메라를 빠르게 초기화하고 센서 FPS를 반환."""
     cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
     if not cap.isOpened():
         raise RuntimeError("카메라를 열 수 없습니다.")
 
-    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+    chosen_fourcc = None
+    for candidate in CAMERA_FORMAT_CANDIDATES:
+        if try_set_fourcc(cap, candidate):
+            chosen_fourcc = candidate
+            break
+    if chosen_fourcc is None:
+        print("지원되는 FOURCC 포맷을 적용하지 못했습니다. 기본 설정으로 시도합니다.")
+    else:
+        print(f"카메라 FOURCC 적용: {chosen_fourcc}")
+
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_SIZE[0])
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_SIZE[1])
+    applied_fourcc = decode_fourcc(cap.get(cv2.CAP_PROP_FOURCC))
 
     requested_fps = float(TARGET_FPS) if TARGET_FPS > 0 else 0.0
     if requested_fps > 0:
@@ -45,9 +339,10 @@ def configure_capture() -> Tuple[cv2.VideoCapture, float]:
     if requested_fps > 0 and sensor_fps > requested_fps + 1e-3:
         print(
             f"카메라 설정: {actual_w:.0f}x{actual_h:.0f} @ {sensor_fps:.1f}fps"
+            f" (FOURCC {applied_fourcc})"
             f" (요청 {requested_fps:.1f}fps, 전송은 {requested_fps:.1f}fps로 제한)")
     else:
-        print(f"카메라 설정: {actual_w:.0f}x{actual_h:.0f} @ {sensor_fps:.1f}fps")
+        print(f"카메라 설정: {actual_w:.0f}x{actual_h:.0f} @ {sensor_fps:.1f}fps (FOURCC {applied_fourcc})")
 
     return cap, sensor_fps
 
@@ -83,18 +378,42 @@ def authenticate(sock: socket.socket) -> bool:
     return False
 
 
-def handle_server_message(line: str) -> None:
+def handle_server_message(line: str, motion: Optional[MotionController]) -> None:
     if not line:
         return
+    upper = line.strip().upper()
     if line.startswith("MOVE:"):
-        print(f"MOVE 명령 수신(무시): {line}")
-    elif line.strip().upper() == "STOP":
-        print("STOP 명령 수신(참고용).")
+        print(f"MOVE 명령 수신: {line}")
+        if motion is None:
+            return
+        try:
+            _, payload = line.split(":", 1)
+            start_raw, target_raw = payload.split("->", 1)
+            tx_str, ty_str = target_raw.split(",", 1)
+            tx = float(tx_str)
+            ty = float(ty_str)
+            motion.move_to((tx, ty))
+        except ValueError:
+            print(f"MOVE 명령 파싱 실패: {line}")
+    elif upper == "STOP":
+        print("STOP 명령 수신: 즉시 정지합니다.")
+        if motion is not None:
+            motion.cancel()
+    elif line.startswith("ALIGN:"):
+        if motion is None:
+            return
+        try:
+            _, payload = line.split(":", 1)
+            target_yaw = float(payload.strip())
+        except ValueError:
+            print(f"ALIGN 명령 파싱 실패: {line}")
+            return
+        motion.align_to(target_yaw)
     else:
         print(f"서버 메시지: {line}")
 
 
-def receive_async(sock: socket.socket) -> None:
+def receive_async(sock: socket.socket, motion: Optional[MotionController]) -> None:
     buffer = bytearray()
     while True:
         try:
@@ -108,7 +427,7 @@ def receive_async(sock: socket.socket) -> None:
                 buffer = bytearray(remainder)
                 line = raw.decode("utf-8", errors="ignore").strip()
                 if line:
-                    handle_server_message(line)
+                    handle_server_message(line, motion)
         except OSError:
             print("메시지 수신 스레드 오류.")
             break
@@ -125,6 +444,16 @@ def send_control_message(sock: socket.socket, message: str) -> None:
         print(f"서버로 제어 메시지 전송: {text}")
     except OSError as exc:
         print(f"제어 메시지 전송 실패: {exc}")
+
+
+def send_pose_message(sock: socket.socket, pose: Tuple[float, float, float]) -> None:
+    header = struct.pack(">L", 0)
+    x, y, yaw = pose
+    payload = f"POSE:{x:.3f},{y:.3f},{yaw:.3f}\n".encode("utf-8")
+    try:
+        sock.sendall(header + payload)
+    except OSError as exc:
+        print(f"POSE 메시지 전송 실패: {exc}")
 
 
 def command_prompt(stop_event: threading.Event, sock: socket.socket) -> None:
@@ -153,13 +482,24 @@ def main() -> None:
 
     stop_event = threading.Event()
 
-    threading.Thread(target=receive_async, args=(sock,), daemon=True).start()
+    odom_bridge = OdometryBridge()
+    if not odom_bridge.start():
+        print("오도메트리 브리지를 초기화하지 못해 클라이언트를 종료합니다.")
+        sock.close()
+        sys.exit(1)
+    motion = MotionController(odom_bridge, lambda msg: send_control_message(sock, msg))
+
+    threading.Thread(target=receive_async, args=(sock, motion), daemon=True).start()
     threading.Thread(target=command_prompt, args=(stop_event, sock), daemon=True).start()
+
+    cap: Optional[cv2.VideoCapture] = None
 
     try:
         cap, sensor_fps = configure_capture()
     except RuntimeError as exc:
         print(exc)
+        motion.stop()
+        odom_bridge.stop()
         sock.close()
         sys.exit(1)
 
@@ -181,12 +521,21 @@ def main() -> None:
 
     try:
         next_frame_time = time.perf_counter()
+        next_pose_send = time.perf_counter()
+        camera_failures = 0
         while True:
             cap.grab()
             ret, frame = cap.read()
             if not ret:
-                print("프레임을 읽지 못했습니다. 종료합니다.")
-                break
+                camera_failures += 1
+                if camera_failures >= CAMERA_FAILURE_LIMIT:
+                    print("프레임을 반복적으로 읽지 못했습니다. 종료합니다.")
+                    break
+                print("프레임을 읽지 못했습니다. 잠시 후 재시도합니다.")
+                time.sleep(0.2)
+                continue
+
+            camera_failures = 0
 
             if frame.shape[1] != FRAME_SIZE[0] or frame.shape[0] != FRAME_SIZE[1]:
                 frame = cv2.resize(frame, FRAME_SIZE, interpolation=cv2.INTER_LINEAR)
@@ -204,6 +553,15 @@ def main() -> None:
                 print("소켓 전송 중 오류 발생. 종료합니다.")
                 break
 
+            now = time.perf_counter()
+            if now >= next_pose_send:
+                if odom_bridge.has_pose():
+                    pose_world = odom_bridge.get_pose(relative=False)
+                    rel_x, rel_y = odom_bridge.to_relative(pose_world[0], pose_world[1])
+                    pose = (rel_x, rel_y, pose_world[2])
+                    send_pose_message(sock, pose)
+                next_pose_send = now + POSE_SEND_INTERVAL
+
             if frame_interval > 0:
                 next_frame_time += frame_interval
                 sleep_for = next_frame_time - time.perf_counter()
@@ -215,7 +573,10 @@ def main() -> None:
         print("사용자 중단 요청으로 종료합니다.")
     finally:
         stop_event.set()
-        cap.release()
+        if cap is not None:
+            cap.release()
+        motion.stop()
+        odom_bridge.stop()
         sock.close()
 
 
