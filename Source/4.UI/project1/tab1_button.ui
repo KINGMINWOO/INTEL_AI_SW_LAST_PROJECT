@@ -18,6 +18,7 @@
     <widget class="QLabel" name="pDate">
      <property name="font">
       <font>
+       <family>Manjari</family>
        <pointsize>20</pointsize>
        <weight>75</weight>
        <bold>true</bold>
@@ -47,12 +48,20 @@
       </spacer>
      </item>
      <item>
-      <widget class="QLCDNumber" name="pTime">
-       <property name="digitCount">
-        <number>8</number>
+      <widget class="QLabel" name="pTime">
+       <property name="font">
+        <font>
+         <family>Manjari</family>
+         <pointsize>80</pointsize>
+         <weight>75</weight>
+         <bold>true</bold>
+        </font>
        </property>
-       <property name="segmentStyle">
-        <enum>QLCDNumber::Filled</enum>
+       <property name="text">
+        <string>00:00:00</string>
+       </property>
+       <property name="alignment">
+        <set>Qt::AlignCenter</set>
        </property>
       </widget>
      </item>
@@ -87,11 +96,16 @@
          <height>300</height>
         </size>
        </property>
+       <property name="font">
+        <font>
+         <family>Ubuntu Condensed</family>
+        </font>
+       </property>
        <property name="text">
         <string/>
        </property>
        <property name="pixmap">
-        <pixmap resource="icons.qrc">:/icons/icons/tomato.png</pixmap>
+        <pixmap resource="icons.qrc">:/icons/icons/tomato1.png</pixmap>
        </property>
        <property name="scaledContents">
         <bool>true</bool>

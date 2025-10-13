@@ -36,8 +36,12 @@ void SocketClient::socketReadDataSlot()
         return;
     byteRecvData = pQTcpSocket->read(BLOCK_SIZE);
     strRecvData = QString::fromLocal8Bit(byteRecvData);
-//    qDebug() << strRecvData;
+    qDebug() << strRecvData;
     emit socketRecvDataSig(strRecvData);
+    if (!m_startSent && strRecvData.contains("AUTH_OK", Qt::CaseInsensitive)) {
+            socketWriteDataSlot("[CCTV01]START");
+            m_startSent = true;
+        }
 
 }
 void SocketClient::socketErrorSlot()
@@ -47,9 +51,9 @@ void SocketClient::socketErrorSlot()
 }
 void SocketClient::socketConnectServerSlot()
 {
-    QString strIdPw ="["+LOGID+":"+LOGPW+"]";
-    QByteArray byteIdPw = strIdPw.toLocal8Bit();
-    pQTcpSocket->write(byteIdPw);
+    const QString line = QString("%1:%2\r\n").arg(LOGID, LOGPW);
+    pQTcpSocket->write(line.toUtf8());
+    pQTcpSocket->flush();
 }
 
 void SocketClient::socketClosedServerSlot()

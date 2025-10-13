@@ -12,7 +12,7 @@ public:
     enum class Mode {
         Temp, Humi, Air,
         SoilHumi, EC, PH,
-        LED
+        LED, TIME
     };
 
     explicit ChangeSetting(QWidget *parent = nullptr);
@@ -24,6 +24,7 @@ public:
 signals:
     void decided(ChangeSetting::Mode mode, int value); // OK/확인 시 최종 값
     void valueChanged(int value); // Up/Down 시 실시간 브로드캐스트(옵션)
+    void sendCommand(const QString& line);
 
 private slots:
     void onUp();
@@ -33,6 +34,7 @@ private slots:
 private:
     void clamp();        // 숫자 모드 범위 보정
     void updateView();   // LCD or LED 라벨 업데이트
+    void updateTimeFromDial(int dialVal);
 
 private:
     Ui::ChangeSetting *ui;

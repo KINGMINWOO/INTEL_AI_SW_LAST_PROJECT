@@ -13,7 +13,7 @@
   <property name="windowTitle">
    <string>Form</string>
   </property>
-  <layout class="QVBoxLayout" name="verticalLayout" stretch="4,4,1">
+  <layout class="QVBoxLayout" name="verticalLayout">
    <item>
     <widget class="QGroupBox" name="groupBox">
      <property name="title">
@@ -23,7 +23,7 @@
       <item>
        <layout class="QVBoxLayout" name="verticalLayout_5" stretch="9,1">
         <item>
-         <widget class="QLCDNumber" name="lcdNumber_5"/>
+         <widget class="QLCDNumber" name="pLcdtemp"/>
         </item>
         <item>
          <widget class="QPushButton" name="pPBAtemp">
@@ -43,7 +43,7 @@
       <item>
        <layout class="QVBoxLayout" name="verticalLayout_6" stretch="9,1">
         <item>
-         <widget class="QLCDNumber" name="lcdNumber_6"/>
+         <widget class="QLCDNumber" name="pLcdhumi"/>
         </item>
         <item>
          <widget class="QPushButton" name="pPBAhumi">
@@ -63,7 +63,7 @@
       <item>
        <layout class="QVBoxLayout" name="verticalLayout_7" stretch="9,1">
         <item>
-         <widget class="QLCDNumber" name="lcdNumber_7"/>
+         <widget class="QLCDNumber" name="pLcdair"/>
         </item>
         <item>
          <widget class="QPushButton" name="pPBair">
@@ -148,7 +148,7 @@
       <item>
        <layout class="QVBoxLayout" name="verticalLayout_11" stretch="9,1">
         <item>
-         <widget class="QLCDNumber" name="lcdNumber_11"/>
+         <widget class="QLCDNumber" name="pLcdShumi"/>
         </item>
         <item>
          <widget class="QPushButton" name="pPBShumi">
@@ -168,7 +168,7 @@
       <item>
        <layout class="QVBoxLayout" name="verticalLayout_9" stretch="0,1">
         <item>
-         <widget class="QLCDNumber" name="lcdNumber_9"/>
+         <widget class="QLCDNumber" name="pLcdec"/>
         </item>
         <item>
          <widget class="QPushButton" name="pPBec">
@@ -194,7 +194,7 @@
       <item>
        <layout class="QVBoxLayout" name="verticalLayout_10" stretch="9,1">
         <item>
-         <widget class="QLCDNumber" name="lcdNumber_10"/>
+         <widget class="QLCDNumber" name="pLcdph"/>
         </item>
         <item>
          <widget class="QPushButton" name="pPBph">
@@ -215,7 +215,17 @@
     </widget>
    </item>
    <item>
-    <layout class="QHBoxLayout" name="horizontalLayout_3" stretch="9,1">
+    <layout class="QHBoxLayout" name="horizontalLayout_3" stretch="3,1,5,1">
+     <item>
+      <widget class="QLCDNumber" name="lcdNumber"/>
+     </item>
+     <item>
+      <widget class="QPushButton" name="pPBtime">
+       <property name="text">
+        <string>수확 시간</string>
+       </property>
+      </widget>
+     </item>
      <item>
       <spacer name="horizontalSpacer_2">
        <property name="orientation">

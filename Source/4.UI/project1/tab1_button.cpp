@@ -33,7 +33,8 @@ void Tab1_button::updateDateTime()
     QDateTime current = QDateTime::currentDateTime();
 
     if (ui->pTime) {
-        ui->pTime->display(current.time().toString("HH:mm:ss"));
+//        ui->pTime->display(current.time().toString("HH:mm:ss"));
+        ui->pTime->setText(current.time().toString("HH:mm:ss"));
     }
 
     if (ui->pDate) {

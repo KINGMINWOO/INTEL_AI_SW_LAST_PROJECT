@@ -14,10 +14,10 @@ class SocketClient : public QWidget
 {
     Q_OBJECT
     QTcpSocket *pQTcpSocket;
-    QString SERVERIP = "127.0.0.1";
-    int SERVERPORT = 5000;
-    QString LOGID = "1";
-    QString LOGPW = "PASSWD";
+    QString SERVERIP = "10.10.16.29";
+    int SERVERPORT = 9999;
+    QString LOGID = "USER01";
+    QString LOGPW = "USER1234";
 
 public:
     explicit SocketClient(QWidget *parent = nullptr);
@@ -35,6 +35,8 @@ public slots:
     void connectToServerSlot(bool &);
     void socketClosedServerSlot();
     void socketWriteDataSlot(QString);
+private:
+    bool m_startSent = false;
 
 signals:
 };

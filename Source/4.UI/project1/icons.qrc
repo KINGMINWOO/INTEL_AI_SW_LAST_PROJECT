@@ -4,5 +4,7 @@
         <file>icons/home.png</file>
         <file>icons/up.png</file>
         <file>icons/tomato.png</file>
+        <file>icons/tomato1.png</file>
+        <file>icons/tomato2.png</file>
     </qresource>
 </RCC>

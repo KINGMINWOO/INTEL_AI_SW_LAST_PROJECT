@@ -40,8 +40,7 @@ void Tab3_cctv::on_pPBcam_toggled(bool checked)
     if (checked) {
         ui->pPBcam->setText("Camera OFF");
 
-        // MJPG-Streamer 스트림 열기
-        cap.open("http://10.10.16.60:8080/?action=stream");
+        cap.open("http://10.10.16.29:5000/video_feed/CCTV01");
         if (cap.isOpened())
             camTimer->start(30); // 30ms마다 갱신
         else

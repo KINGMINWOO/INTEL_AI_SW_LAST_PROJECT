@@ -21,14 +21,14 @@
      </property>
      <layout class="QHBoxLayout" name="horizontalLayout" stretch="4,1,4,1">
       <item>
-       <widget class="QDateEdit" name="dateEdit">
+       <widget class="QDateEdit" name="pStartdate">
         <property name="dateTime">
          <datetime>
           <hour>0</hour>
           <minute>0</minute>
           <second>0</second>
           <year>2025</year>
-          <month>1</month>
+          <month>10</month>
           <day>1</day>
          </datetime>
         </property>
@@ -51,14 +51,14 @@
        </widget>
       </item>
       <item>
-       <widget class="QDateEdit" name="dateEdit_2">
+       <widget class="QDateEdit" name="pLastdate">
         <property name="dateTime">
          <datetime>
           <hour>0</hour>
           <minute>0</minute>
           <second>0</second>
           <year>2025</year>
-          <month>1</month>
+          <month>10</month>
           <day>1</day>
          </datetime>
         </property>
@@ -71,7 +71,7 @@
        </widget>
       </item>
       <item>
-       <widget class="QPushButton" name="pushButton">
+       <widget class="QPushButton" name="pPBsearch">
         <property name="text">
          <string>조회</string>
         </property>
@@ -109,7 +109,7 @@
          </widget>
         </item>
         <item>
-         <widget class="QLabel" name="label_3">
+         <widget class="QLabel" name="pLblfresh">
           <property name="font">
            <font>
             <pointsize>25</pointsize>
@@ -155,7 +155,7 @@
          </widget>
         </item>
         <item>
-         <widget class="QLabel" name="label_5">
+         <widget class="QLabel" name="pLblrotten">
           <property name="font">
            <font>
             <pointsize>25</pointsize>
@@ -201,7 +201,7 @@
          </widget>
         </item>
         <item>
-         <widget class="QLabel" name="label_7">
+         <widget class="QLabel" name="pLblpercent">
           <property name="font">
            <font>
             <pointsize>25</pointsize>
@@ -239,7 +239,7 @@
        </widget>
       </item>
       <item row="0" column="1">
-       <widget class="QLCDNumber" name="lcdNumber"/>
+       <widget class="QLCDNumber" name="pLcdairtemp"/>
       </item>
       <item row="0" column="2">
        <widget class="QLabel" name="label_9">
@@ -272,19 +272,19 @@
        </widget>
       </item>
       <item row="0" column="3">
-       <widget class="QLCDNumber" name="lcdNumber_2"/>
+       <widget class="QLCDNumber" name="pLcdlandtemp"/>
       </item>
       <item row="1" column="1">
-       <widget class="QLCDNumber" name="lcdNumber_3"/>
+       <widget class="QLCDNumber" name="pLcdairhumi"/>
       </item>
       <item row="1" column="3">
-       <widget class="QLCDNumber" name="lcdNumber_4"/>
+       <widget class="QLCDNumber" name="pLcdlandhumi"/>
       </item>
       <item row="2" column="3">
-       <widget class="QLCDNumber" name="lcdNumber_5"/>
+       <widget class="QLCDNumber" name="pLcdec"/>
       </item>
       <item row="2" column="1">
-       <widget class="QLCDNumber" name="lcdNumber_6"/>
+       <widget class="QLCDNumber" name="pLcdair"/>
       </item>
       <item row="1" column="2">
        <widget class="QLabel" name="label_10">
@@ -307,10 +307,10 @@
        </widget>
       </item>
       <item row="3" column="1">
-       <widget class="QLCDNumber" name="lcdNumber_8"/>
+       <widget class="QLCDNumber" name="pLcdairillu"/>
       </item>
       <item row="3" column="3">
-       <widget class="QLCDNumber" name="lcdNumber_7"/>
+       <widget class="QLCDNumber" name="pLcdph"/>
       </item>
       <item row="3" column="2">
        <widget class="QLabel" name="label_15">

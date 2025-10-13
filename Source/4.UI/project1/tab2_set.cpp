@@ -23,7 +23,6 @@ Tab2_set::Tab2_set(QWidget *parent)
 {
     ui->setupUi(this);
 
-    // 다이얼로그 1개만 재사용
     mChangeDlg = new ChangeSetting(this);
     connect(mChangeDlg, &ChangeSetting::decided,
             this, &Tab2_set::onSettingDecided);
@@ -58,7 +57,6 @@ Tab2_set::~Tab2_set()
     delete ui;
 }
 
-// ───── 버튼 핸들러들 ─────
 void Tab2_set::on_pPBAtemp_clicked()
 {
     int current = 25;   // TODO: 실제 현재값으로 대체
@@ -95,13 +93,11 @@ void Tab2_set::on_pPBph_clicked()
     openSetting(ChangeSetting::Mode::PH, current, 0, 14);
 }
 
-// LED: OFF→LOW→MID→HIGH 단계 설정 열기
 void Tab2_set::on_pPBled_clicked()
 {
     openSetting(ChangeSetting::Mode::LED, m_ledLevel, 0, 3);
 }
 
-// ───── 공통 오픈/오버레이 ─────
 void Tab2_set::openSetting(ChangeSetting::Mode mode, int current, int minVal, int maxVal)
 {
     mChangeDlg->setMode(mode, current, minVal, maxVal);
@@ -121,7 +117,6 @@ void Tab2_set::showOverlay(ChangeSetting &dlg, QWidget *host)
     dlg.exec();
 }
 
-// ───── OK 눌렀을 때 서버 문자열 전송 ─────
 void Tab2_set::onSettingDecided(ChangeSetting::Mode mode, int value)
 {
     if (mode == ChangeSetting::Mode::LED) {
@@ -129,15 +124,26 @@ void Tab2_set::onSettingDecided(ChangeSetting::Mode mode, int value)
             const QString level = ledText(value);  // "OFF/LOW/MID/HIGH"
             if (ui->pLblLedState) ui->pLblLedState->setText(level);
 
-            const QString msg = QString("[CCTV]LED@%1").arg(level);
+            const QString msg = QString("[CCTV01]LED@%1").arg(level);
             emit sendToServer(msg);
             qDebug() << "[Tab2_set] sendToServer LED:" << msg;
             return;
         }
+    if (mode == ChangeSetting::Mode::TIME) {
+        int hh = (value / 60) % 24;
+        int mm = value % 60;
+        const QString hhmm = QString("%1:%2")
+                                .arg(hh, 2, 10, QChar('0'))
+                                .arg(mm, 2, 10, QChar('0'));
+        const QString msg = QString("TIME@%1").arg(hhmm);
+        emit sendToServer(msg);
+        qDebug() << "[Tab2_set] sendToServer TIME:" << msg;
+        return;
+    }
 
     // 숫자 항목 공통 처리
     const Topic t = topicForMode(mode);
-    const QString msg = QString("[CCTV]%1@%2@%3")
+    const QString msg = QString("[CCTV01]%1@%2@%3")
                             .arg(t.domain, t.key)
                             .arg(value);
     emit sendToServer(msg);
@@ -148,14 +154,20 @@ Tab2_set::Topic Tab2_set::topicForMode(ChangeSetting::Mode m) const
 {
     switch (m) {
     // ── 공기(Air) ──
-    case ChangeSetting::Mode::Temp:     return {"Air",  "temp"};
-    case ChangeSetting::Mode::Humi:     return {"Air",  "humi"};
-    case ChangeSetting::Mode::Air:      return {"Air",  "air"};
+    case ChangeSetting::Mode::Temp:     return {"AIR",  "TEMP"};
+    case ChangeSetting::Mode::Humi:     return {"AIR",  "HUMI"};
+    case ChangeSetting::Mode::Air:      return {"AIR",  "AIR"};
 
     // ── 토양(Land) ──
-    case ChangeSetting::Mode::SoilHumi: return {"Land", "humi"};
-    case ChangeSetting::Mode::EC:       return {"Land", "ec"};
-    case ChangeSetting::Mode::PH:       return {"Land", "ph"};
+    case ChangeSetting::Mode::SoilHumi: return {"LAND", "HUMI"};
+    case ChangeSetting::Mode::EC:       return {"LAND", "EC"};
+    case ChangeSetting::Mode::PH:       return {"LAND", "PH"};
     }
-    return {"Air", "unknown"};
+    return {"AIR", "unknown"};
+}
+
+
+void Tab2_set::on_pPBtime_clicked()
+{
+    openSetting(ChangeSetting::Mode::TIME, m_ledLevel, 0, 3);
 }

@@ -27,6 +27,7 @@ private slots:
     void on_pPBled_clicked();  // LED 단계 다이얼로그
 
     void onSettingDecided(ChangeSetting::Mode mode, int value);
+    void on_pPBtime_clicked();
 
 signals:
     void goToHome();

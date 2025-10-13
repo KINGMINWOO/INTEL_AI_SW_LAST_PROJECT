@@ -20,6 +20,8 @@ private:
 
 signals:
     void goToHome();
+private slots:
+    void on_pPBsearch_clicked();
 };
 
 #endif // TAB4_TOMATO_H
