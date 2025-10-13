@@ -970,14 +970,14 @@ def index():
     )
 
 
-    if __name__ == '__main__':
-        # 소켓 서버를 별도의 스레드에서 실행
-        socket_thread = threading.Thread(target=start_socket_server)
-        socket_thread.daemon = True
-        socket_thread.start()
+if __name__ == '__main__':
+    # 소켓 서버를 별도의 스레드에서 실행
+    socket_thread = threading.Thread(target=start_socket_server)
+    socket_thread.daemon = True
+    socket_thread.start()
 
-        pose_thread = threading.Thread(target=pose_debug_worker, daemon=True)
-        pose_thread.start()
+    pose_thread = threading.Thread(target=pose_debug_worker, daemon=True)
+    pose_thread.start()
 
-        # Flask 앱 실행
-        app.run(host='0.0.0.0', port=5000, debug=False)
+    # Flask 앱 실행
+    app.run(host='0.0.0.0', port=5000, debug=False)
