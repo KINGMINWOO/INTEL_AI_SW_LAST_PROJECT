@@ -50,8 +50,7 @@ ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py headless:=True
 ```bash
 source /opt/ros/humble/setup.bash
 export TURTLEBOT3_MODEL=burger
-ros2 launch turtlebot3_navigation2 navigation2.launch.py use_sim_time:=True \
-    map:=/opt/ros/humble/share/turtlebot3_navigation2/map/turtlebot3_world.yaml
+ros2 launch turtlebot3_navigation2 navigation2.launch.py use_sim_time:=True map:=/opt/ros/humble/share/turtlebot3_navigation2/map/map.yaml
 ```
 
 ### 3.3 RViz로 초기 포즈 설정

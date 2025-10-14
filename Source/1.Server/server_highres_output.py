@@ -1,5 +1,6 @@
 # server_highres_output.py (컴퓨터에서 실행)
 import math
+import os
 import socket
 import cv2
 # import pickle # pickle은 더 이상 사용하지 않음
@@ -22,6 +23,12 @@ except Exception as nav2_import_error:  # noqa: BLE001
     Nav2Result = None  # type: ignore
     create_nav2_bridge = None  # type: ignore
     print(f"Nav2 브리지 모듈을 불러오지 못했습니다: {nav2_import_error}")
+
+try:
+    from farm_storage import FarmDataLogger
+except Exception as farm_storage_import_error:  # noqa: BLE001
+    FarmDataLogger = None  # type: ignore
+    print(f"농가 데이터 로거를 불러오지 못했습니다: {farm_storage_import_error}")
 
 DETECTION_WINDOW_SECONDS = 3.0
 DETECTION_COUNT_THRESHOLD = 5
@@ -54,6 +61,7 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu' # CUDA 사용 가능 여
 #model = YOLO('/home/bbang/Workspace/intel_final/intel_final_project/runs/detect/yolov8x_tomato3/weights/best.pt').to(device) # 모델을 해당 장치로 로드
 #model = YOLO('/home/bbang/Workspace/intel_final/intel_final_project/runs/detect/yolov8x_tomato10/weights/best.pt').to(device) # 모델을 해당 장치로 로드
 model = YOLO('best.pt').to(device)
+model_lock = threading.Lock()
 
 BASE_DIR = Path(__file__).resolve().parent
 CREDENTIAL_FILE = BASE_DIR / "idlist.txt"
@@ -71,11 +79,166 @@ frames_lock = threading.Lock()
 robot_clients = {}
 robot_states = {}
 control_lock = threading.Lock()
+cctv_clients = {}
 nav2_bridge: Optional["Nav2Bridge"] = None
 nav2_motion_lock = threading.Lock()
 nav2_motion_thread: Optional[threading.Thread] = None
 nav2_active_robot: Optional[str] = None
 alignment_threads: dict[str, threading.Thread] = {}
+DEFAULT_FARM_DB_URL = "mysql+pymysql://user01:user1234@127.0.0.1:3306/smart_farm"
+farm_db_url = os.getenv("FARM_DB_URL") or DEFAULT_FARM_DB_URL
+if FarmDataLogger:
+    if "your_password" in farm_db_url:
+        print("경고: FARM_DB_URL이 설정되지 않았거나 기본 비밀번호가 그대로입니다. 실제 MariaDB 비밀번호로 수정하세요.")
+    farm_logger = FarmDataLogger(farm_db_url)
+else:
+    farm_logger = None
+
+
+def _parse_float(token: str) -> Optional[float]:
+    try:
+        return float(token)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_int(token: str) -> Optional[int]:
+    try:
+        return int(float(token))
+    except (TypeError, ValueError):
+        return None
+
+
+def try_handle_sensor_payload(source_id: str, payload: str) -> bool:
+    if not payload:
+        return False
+
+    tokens = [segment.strip() for segment in payload.split("@")]
+    if not tokens:
+        return False
+
+    kind = tokens[0].lower()
+    values = tokens[1:]
+    device_id = source_id.upper()
+
+    if kind == "air":
+        if not values:
+            print(f"{device_id} 잘못된 공기 센서 페이로드: {payload}")
+            return True
+
+        temperature = _parse_float(values[0]) if len(values) >= 1 else None
+        humidity = _parse_float(values[1]) if len(values) >= 2 else None
+        air_quality = _parse_int(values[2]) if len(values) >= 3 else None
+        illuminance = _parse_int(values[3]) if len(values) >= 4 else None
+
+        if farm_logger:
+            stored = farm_logger.log_air_sample(
+                device_id=device_id,
+                temperature_c=temperature,
+                humidity_pct=humidity,
+                air_quality=air_quality,
+                illuminance_lux=illuminance,
+            )
+            status = "저장" if stored else "로컬로그"
+        else:
+            status = "미초기화"
+        print(
+            f"[FARM-AIR] {device_id} temp={temperature} hum={humidity} "
+            f"air={air_quality} lux={illuminance} ({status})"
+        )
+        return True
+
+    if kind == "land":
+        if not values:
+            print(f"{device_id} 잘못된 토양 센서 페이로드: {payload}")
+            return True
+
+        temperature = _parse_float(values[0]) if len(values) >= 1 else None
+        humidity = _parse_float(values[1]) if len(values) >= 2 else None
+        ec = _parse_int(values[2]) if len(values) >= 3 else None
+        ph = _parse_float(values[3]) if len(values) >= 4 else None
+
+        if farm_logger:
+            stored = farm_logger.log_land_sample(
+                device_id=device_id,
+                temperature_c=temperature,
+                humidity_pct=humidity,
+                ec=ec,
+                ph=ph,
+            )
+            status = "저장" if stored else "로컬로그"
+        else:
+            status = "미초기화"
+        print(
+            f"[FARM-LAND] {device_id} temp={temperature} hum={humidity} "
+            f"ec={ec} ph={ph} ({status})"
+        )
+        return True
+
+    return False
+
+
+def count_tomatoes_in_frame(frame: np.ndarray, conf_threshold: float = 0.6) -> tuple[int, int]:
+    """단일 프레임에서 익은/썩은 토마토 수를 계산."""
+    h_orig, w_orig, _ = frame.shape
+    yolo_w = 640
+    yolo_h = int(yolo_w * (h_orig / w_orig))
+    resized = cv2.resize(frame, (yolo_w, yolo_h))
+    with model_lock:
+        results = model(resized, verbose=False)
+    ripe_count = 0
+    rotten_count = 0
+    for box in results[0].boxes:
+        conf = float(box.conf[0])
+        if conf < conf_threshold:
+            continue
+        cls = int(box.cls[0])
+        name = model.names[cls]
+        if name == "ripe":
+            ripe_count += 1
+        elif name == "rotten":
+            rotten_count += 1
+    return ripe_count, rotten_count
+
+
+def capture_cctv_snapshot(user_suffix: str) -> tuple[Optional[str], Optional[np.ndarray]]:
+    """USERxx와 매칭되는 CCTVxx 프레임을 우선적으로 반환."""
+    frame_copy: Optional[np.ndarray] = None
+    cctv_id: Optional[str] = None
+    with frames_lock:
+        if user_suffix:
+            matched_id = f"CCTV{user_suffix}"
+            frame = client_frames.get(matched_id)
+            if frame is not None:
+                cctv_id = matched_id
+                frame_copy = frame.copy()
+        if frame_copy is None:
+            for cid, frame in client_frames.items():
+                if cid.upper().startswith("CCTV") and frame is not None:
+                    cctv_id = cid
+                    frame_copy = frame.copy()
+                    break
+    return cctv_id, frame_copy
+
+
+def analyze_cctv_before_sequence(user_suffix: str) -> None:
+    """turtle@go 실행 전 CCTV 프레임을 분석해 DB에 스냅샷을 남긴다."""
+    cctv_id, frame = capture_cctv_snapshot(user_suffix)
+    if cctv_id is None or frame is None:
+        print("[토마토 스냅샷] 사용 가능한 CCTV 프레임이 없어 분석을 건너뜁니다.")
+        return
+
+    ripe, rotten = count_tomatoes_in_frame(frame)
+    total = ripe + rotten
+
+    status = "미초기화"
+    if farm_logger:
+        stored = farm_logger.log_tomato_snapshot(cctv_id, ripe, rotten)
+        status = "저장" if stored else "로컬로그"
+
+    print(
+        f"[토마토 스냅샷] CCTV={cctv_id} ripe={ripe} rotten={rotten} total={total} ({status})"
+    )
 
 
 def normalize_angle(angle: float) -> float:
@@ -675,6 +838,9 @@ def handle_client(conn, addr, client_id, prefetched_data=b""):
             state.setdefault("pose_updated_at", 0.0)
             state.setdefault("align_pending", False)
             state.setdefault("align_target_yaw", 0.0)
+    elif client_id.upper().startswith("CCTV"):
+        with control_lock:
+            cctv_clients[client_id.upper()] = conn
 
     data = prefetched_data
     payload_size = struct.calcsize(">L")
@@ -749,6 +915,8 @@ def handle_client(conn, addr, client_id, prefetched_data=b""):
                             state["pose_yaw"] = yaw_val
                         state["pose_updated_at"] = time.monotonic()
                     continue
+                if try_handle_sensor_payload(client_id, control_line):
+                    continue
                 lowered = control_line.lower()
                 if lowered == "move@done" and is_robot:
                     complete_manual_move(client_id.upper())
@@ -779,81 +947,92 @@ def handle_client(conn, addr, client_id, prefetched_data=b""):
             # 원본 프레임 해상도
             h_orig, w_orig, _ = frame.shape
 
-            # YOLO 추론용 프레임 크기 설정
-            yolo_w = 640
-            yolo_h = int(yolo_w * (h_orig / w_orig)) # 종횡비를 유지한 높이 계산
-            resized_frame_for_yolo = cv2.resize(frame, (yolo_w, yolo_h)) # YOLO 입력용 프레임
-
-            # YOLOv8 추론 수행
-            results = model(resized_frame_for_yolo, verbose=False)
-            
-            # 원본 해상도의 프레임 복사본 준비
             rendered_frame = frame.copy()
-            
-            # YOLO 입력 크기 대비 원본 크기 스케일 계산
-            scale_x = w_orig / yolo_w
-            scale_y = h_orig / yolo_h
-            
-            # 정규화 좌표를 이용해 바운딩 박스 그리기
-            for box in results[0].boxes:
-                conf = box.conf[0]
-                # 신뢰도 임계값 체크
-                if conf < conf_threshold:
-                    continue
+            font_base_width = w_orig
 
-                # YOLO 정규화 좌표 읽기
-                nx1, ny1, nx2, ny2 = box.xyxyn[0]
-                
-                # 픽셀 좌표로 변환 후 원본 크기에 맞게 스케일링
-                x1 = int(nx1 * yolo_w * scale_x)
-                y1 = int(ny1 * yolo_h * scale_y)
-                x2 = int(nx2 * yolo_w * scale_x)
-                y2 = int(ny2 * yolo_h * scale_y)
-                
-                cls = int(box.cls[0])
-                class_name = model.names[cls]
-                label = f"{class_name} {conf:.2f}"
+            if is_robot:
+                # YOLO 추론용 프레임 크기 설정
+                yolo_w = 640
+                yolo_h = int(yolo_w * (h_orig / w_orig))  # 종횡비를 유지한 높이 계산
+                resized_frame_for_yolo = cv2.resize(frame, (yolo_w, yolo_h))  # YOLO 입력용 프레임
+                font_base_width = yolo_w
 
-                # 'ripe' 또는 'rotten'이 감지되면 클라이언트로 좌표 전송
-                if class_name in ['ripe', 'rotten']:
-                    try:
-                        message = f"{class_name}:{x1},{y1}\n"
-                        conn.sendall(message.encode('utf-8'))
-                    except socket.error as e:
-                        print(f"클라이언트로 메시지 전송 실패: {e}")
+                # YOLOv8 추론 수행
+                with model_lock:
+                    results = model(resized_frame_for_yolo, verbose=False)
 
-                if is_robot and class_name in {"ripe", "rotten"}:
-                    category = "ripe" if class_name == "ripe" else "rotten"
-                    if should_trigger_auto_stop(client_id.upper(), category, ((x1 + x2) / 2) / w_orig):
-                        cancel_nav2_navigation(client_id.upper())
-                        send_stop_to_robot(client_id)
-                        y_center_norm = ((y1 + y2) / 2) / h_orig
-                        if y_center_norm < 1.0 / 3:
-                            arm_topic = b"robot@high\n"
-                        elif y_center_norm < 2.0 / 3:
-                            arm_topic = b"robot@middle\n"
-                        else:
-                            arm_topic = b"robot@low\n"
+                # YOLO 입력 크기 대비 원본 크기 스케일 계산
+                scale_x = w_orig / yolo_w
+                scale_y = h_orig / yolo_h
+
+                # 정규화 좌표를 이용해 바운딩 박스 그리기
+                for box in results[0].boxes:
+                    conf = float(box.conf[0])
+                    # 신뢰도 임계값 체크
+                    if conf < conf_threshold:
+                        continue
+
+                    # YOLO 정규화 좌표 읽기
+                    nx1, ny1, nx2, ny2 = box.xyxyn[0]
+
+                    # 픽셀 좌표로 변환 후 원본 크기에 맞게 스케일링
+                    x1 = int(nx1 * yolo_w * scale_x)
+                    y1 = int(ny1 * yolo_h * scale_y)
+                    x2 = int(nx2 * yolo_w * scale_x)
+                    y2 = int(ny2 * yolo_h * scale_y)
+
+                    cls = int(box.cls[0])
+                    class_name = model.names[cls]
+                    label = f"{class_name} {conf:.2f}"
+
+                    # 'ripe' 또는 'rotten'이 감지되면 클라이언트로 좌표 전송
+                    if class_name in ["ripe", "rotten"]:
                         try:
-                            conn.sendall(arm_topic)
-                            print(f"{client_id} 로봇팔 명령 전송: {arm_topic.decode().strip()}")
-                        except socket.error as exc:
-                            print(f"{client_id} 로봇팔 명령 전송 실패: {exc}")
+                            message = f"{class_name}:{x1},{y1}\n"
+                            conn.sendall(message.encode("utf-8"))
+                        except socket.error as e:
+                            print(f"클라이언트로 메시지 전송 실패: {e}")
 
-                cv2.rectangle(rendered_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                # 라벨 표시용 글꼴 크기 조정
-                label_font_scale = 0.5 * (w_orig / yolo_w)
-                cv2.putText(rendered_frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, label_font_scale, (0, 255, 0), 2)
-            
+                    if class_name in {"ripe", "rotten"}:
+                        category = "ripe" if class_name == "ripe" else "rotten"
+                        if should_trigger_auto_stop(client_id.upper(), category, ((x1 + x2) / 2) / w_orig):
+                            cancel_nav2_navigation(client_id.upper())
+                            send_stop_to_robot(client_id)
+                            y_center_norm = ((y1 + y2) / 2) / h_orig
+                            if y_center_norm < 1.0 / 3:
+                                arm_topic = b"robot@high\n"
+                            elif y_center_norm < 2.0 / 3:
+                                arm_topic = b"robot@middle\n"
+                            else:
+                                arm_topic = b"robot@low\n"
+                            try:
+                                conn.sendall(arm_topic)
+                                print(f"{client_id} 로봇팔 명령 전송: {arm_topic.decode().strip()}")
+                            except socket.error as exc:
+                                print(f"{client_id} 로봇팔 명령 전송 실패: {exc}")
+
+                    cv2.rectangle(rendered_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    # 라벨 표시용 글꼴 크기 조정
+                    label_font_scale = 0.5 * (w_orig / yolo_w)
+                    cv2.putText(
+                        rendered_frame,
+                        label,
+                        (x1, y1 - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        label_font_scale,
+                        (0, 255, 0),
+                        2,
+                    )
+
             # FPS 계산
             fps_frame_count += 1
             if time.time() - fps_start_time >= 1.0:
                 display_fps = fps_frame_count / (time.time() - fps_start_time)
                 fps_frame_count = 0
                 fps_start_time = time.time()
-            
+
             # FPS 표시 (글꼴 크기 포함)
-            fps_font_scale = 0.7 * (w_orig / yolo_w)
+            fps_font_scale = 0.7 * (w_orig / font_base_width)
             cv2.putText(rendered_frame, f"FPS: {display_fps:.2f}", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, fps_font_scale, (0, 0, 255), 2)
             
             # 처리된 프레임을 공유 변수에 저장
@@ -868,10 +1047,12 @@ def handle_client(conn, addr, client_id, prefetched_data=b""):
     print(f"클라이언트 {addr} 연결이 끊겼습니다.")
     with frames_lock:
         client_frames.pop(client_id, None)
-    if is_robot:
-        with control_lock:
+    with control_lock:
+        if is_robot:
             robot_clients.pop(client_id.upper(), None)
             robot_states.pop(client_id.upper(), None)
+        elif client_id.upper().startswith("CCTV"):
+            cctv_clients.pop(client_id.upper(), None)
     conn.close()
 
 
@@ -989,6 +1170,25 @@ def handle_user_client(conn, addr, client_id, prefetched_data=b""):
             if not message:
                 continue
             print(f"[{client_id}] 수신: {message}")
+            if message.startswith("[") and "]" in message:
+                bracket_end = message.find("]")
+                target_label = message[1:bracket_end].strip()
+                payload = message[bracket_end + 1 :].lstrip()
+                target_key = target_label.upper()
+                if target_key.startswith("CCTV"):
+                    with control_lock:
+                        target_conn = cctv_clients.get(target_key)
+                    if not target_conn:
+                        conn.sendall(b"ERROR:TARGET_NOT_FOUND\n")
+                        continue
+                    try:
+                        target_conn.sendall((payload.rstrip("\r\n") + "\n").encode("utf-8"))
+                        conn.sendall(b"CMD_OK\n")
+                    except OSError as exc:
+                        print(f"{client_id} -> {target_key} 메시지 전달 실패: {exc}")
+                        conn.sendall(b"ERROR:FORWARD_FAILED\n")
+                    continue
+
             command = message.lower()
             spec = command_specs.get(command)
             if spec:
