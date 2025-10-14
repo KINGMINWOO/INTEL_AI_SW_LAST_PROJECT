@@ -55,8 +55,9 @@ nav2_motion_lock = threading.Lock()
 nav2_motion_thread: Optional[threading.Thread] = None
 nav2_active_robot: Optional[str] = None
 
-# --- 텍스트 메시지 라우팅용 레지스트리/락 ---
+# --- 텍스트/영상 라우팅용 레지스트리 ---
 text_clients: dict[str, socket.socket] = {}
+video_clients: dict[str, socket.socket] = {}  # ★ 추가
 text_lock = threading.Lock()
 
 def register_text_client(client_id: str, conn: socket.socket) -> None:
@@ -67,18 +68,44 @@ def unregister_text_client(client_id: str) -> None:
     with text_lock:
         text_clients.pop(client_id.upper(), None)
 
-def _send_text_to(target_id: str, from_id: str, payload: str) -> tuple[bool, str]:
-    """대상에게 한 줄 메시지 전송. 본문은 [보낸ID]payload 형태로 보냄."""
+def register_video_client(client_id: str, conn: socket.socket) -> None:   # ★ 추가
     with text_lock:
-        dst = text_clients.get(target_id.upper())
-    if not dst:
-        return False, "TARGET_NOT_CONNECTED"
-    try:
-        msg = f"[{from_id}]{payload}\n".encode("utf-8", errors="ignore")
-        dst.sendall(msg)
-        return True, "OK"
-    except OSError as e:
-        return False, f"SEND_FAILED:{e}"
+        video_clients[client_id.upper()] = conn
+
+def unregister_video_client(client_id: str) -> None:                       # ★ 추가
+    with text_lock:
+        video_clients.pop(client_id.upper(), None)
+
+
+def _send_text_to(target_id: str, from_id: str, payload: str) -> tuple[bool, str]:
+    """대상에게 한 줄 메시지 전송.
+       - 텍스트 소켓: [FROM]payload\n
+       - 영상 소켓:  (u32BE=0) + [FROM]payload\n
+    """
+    up = target_id.upper()
+    msg_line = f"[{from_id}]{payload}\n".encode("utf-8", errors="ignore")
+    with text_lock:
+        dst_text  = text_clients.get(up)
+        dst_video = video_clients.get(up)
+
+    # 1) 텍스트 클라로 직송
+    if dst_text:
+        try:
+            dst_text.sendall(msg_line)
+            return True, "OK"
+        except OSError as e:
+            return False, f"SEND_FAILED:{e}"
+
+    # 2) 영상 클라로는 '길이=0 + 라인' 프레이밍으로
+    if dst_video:
+        try:
+            pkt = struct.pack(">L", 0) + msg_line
+            dst_video.sendall(pkt)
+            return True, "OK"
+        except OSError as e:
+            return False, f"SEND_FAILED:{e}"
+
+    return False, "TARGET_NOT_CONNECTED"
 
 def try_route_bracket_message(sender_id: str, line: str) -> bool:
     """라인이 [ID]payload 형태면 대상에게 전달하고 True, 아니면 False."""
@@ -472,6 +499,9 @@ def handle_client(conn, addr, client_id, prefetched_data=b""):
             state.setdefault("pose", (0.0, 0.0))
             state.setdefault("pose_yaw", 0.0)
             state.setdefault("pose_updated_at", 0.0)
+    # ★ CCTV 등 영상 클라면 video_clients에 등록
+    if not is_robot:
+        register_video_client(client_id, conn)
 
     data = prefetched_data
     payload_size = struct.calcsize(">L")
@@ -665,6 +695,9 @@ def handle_client(conn, addr, client_id, prefetched_data=b""):
         with control_lock:
             robot_clients.pop(client_id.upper(), None)
             robot_states.pop(client_id.upper(), None)
+    else:
+        unregister_video_client(client_id)   # ★ 추가
+
     conn.close()
 
 
@@ -791,6 +824,7 @@ def handle_cctv_auto(conn, addr, client_id, prefetched_data=b""):
 def handle_user_client(conn, addr, client_id, prefetched_data=b""):
     """USERxx 명령을 받아 대응되는 TURTLEBOTxx로 전달."""
     print(f"사용자 채널 {addr} 접속 (ID: {client_id})")
+    register_text_client(client_id, conn)
     suffix = client_id.upper()[4:] if len(client_id) >= 4 else ""
     target_id = f"TURTLE{suffix}" if suffix else None
     buffer = bytearray(prefetched_data)
@@ -863,6 +897,7 @@ def handle_user_client(conn, addr, client_id, prefetched_data=b""):
     except OSError as exc:
         print(f"사용자 채널 오류 ({client_id}): {exc}")
     finally:
+        unregister_text_client(client_id)
         print(f"사용자 채널 종료 (ID: {client_id})")
         conn.close()
 
@@ -970,14 +1005,14 @@ def index():
     )
 
 
-if __name__ == '__main__':
-    # 소켓 서버를 별도의 스레드에서 실행
-    socket_thread = threading.Thread(target=start_socket_server)
-    socket_thread.daemon = True
-    socket_thread.start()
+    if __name__ == '__main__':
+        # 소켓 서버를 별도의 스레드에서 실행
+        socket_thread = threading.Thread(target=start_socket_server)
+        socket_thread.daemon = True
+        socket_thread.start()
 
-    pose_thread = threading.Thread(target=pose_debug_worker, daemon=True)
-    pose_thread.start()
+        pose_thread = threading.Thread(target=pose_debug_worker, daemon=True)
+        pose_thread.start()
 
-    # Flask 앱 실행
-    app.run(host='0.0.0.0', port=5000, debug=False)
+        # Flask 앱 실행
+        app.run(host='0.0.0.0', port=5000, debug=False)
