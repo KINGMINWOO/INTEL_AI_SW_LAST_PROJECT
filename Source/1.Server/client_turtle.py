@@ -26,7 +26,8 @@ AUTH_OK = "AUTH_OK"
 CLIENT_ID = "TURTLE01"
 CLIENT_PASSWORD = "TURTLE1234"
 
-SERVER_ADDR: Tuple[str, int] = ("10.10.16.29", 9999)
+#SERVER_ADDR: Tuple[str, int] = ("10.10.16.29", 9999)
+SERVER_ADDR: Tuple[str, int] = ("127.0.0.1", 9999)
 FRAME_SIZE = (640, 480)  # (width, height)
 TARGET_FPS = 10          # 0 => no sleep, otherwise throttle
 JPEG_QUALITY = 85
@@ -193,13 +194,15 @@ class OdometryBridge:
 
 
 class MotionController:
-    """간단한 직선 이동을 수행하는 제어기."""
+    """간단한 직선/회전 제어를 수행하는 컨트롤러."""
 
     def __init__(self, bridge: OdometryBridge, notify_cb) -> None:
         self._bridge = bridge
         self._notify_cb = notify_cb
         self._target: Optional[Tuple[float, float]] = None
-        self._rotation_target: Optional[float] = None
+        self._manual_active = False
+        self._manual_linear = 0.0
+        self._manual_angular = 0.0
         self._lock = threading.Lock()
         self._cancel_requested = False
         self._running = True
@@ -212,26 +215,27 @@ class MotionController:
             return
         with self._lock:
             self._target = target
-            self._rotation_target = None
+            self._manual_active = False
             self._cancel_requested = False
-        rel = self._bridge.to_relative(target[0], target[1])
-        print(f"[모션] 목표 좌표 world({target[0]:.2f}, {target[1]:.2f}) / rel({rel[0]:.2f}, {rel[1]:.2f}) 이동 시작")
+        print(f"[모션] 목표 좌표 rel({target[0]:.2f}, {target[1]:.2f}) 이동 시작")
 
-    def align_to(self, target_yaw: float) -> None:
+    def set_manual_velocity(self, linear: float, angular: float) -> None:
         if not self._bridge.start():
-            print("ROS2 브리지를 시작할 수 없어 정렬 명령을 건너뜁니다.")
+            print("ROS2 브리지를 시작할 수 없어 수동 제어를 건너뜁니다.")
             return
-        target_yaw = normalize_angle(target_yaw)
         with self._lock:
             self._target = None
-            self._rotation_target = target_yaw
+            self._manual_linear = linear
+            self._manual_angular = angular
+            self._manual_active = abs(linear) > 1e-4 or abs(angular) > 1e-4
             self._cancel_requested = False
-        print(f"[모션] yaw {target_yaw:.3f}rad 정렬 시작")
+        if not self._manual_active:
+            self._bridge.send_velocity(0.0, 0.0)
 
     def cancel(self) -> None:
         with self._lock:
             self._target = None
-            self._rotation_target = None
+            self._manual_active = False
             self._cancel_requested = True
         self._bridge.send_velocity(0.0, 0.0)
         print("[모션] 이동 취소 및 정지")
@@ -251,10 +255,12 @@ class MotionController:
         while self._running:
             with self._lock:
                 target = self._target
-                rotation_target = self._rotation_target
+                manual_active = self._manual_active
+                manual_linear = self._manual_linear
+                manual_angular = self._manual_angular
                 cancelled = self._cancel_requested
 
-            if cancelled or (target is None and rotation_target is None):
+            if cancelled or (target is None and not manual_active):
                 time.sleep(0.05)
                 continue
 
@@ -263,30 +269,20 @@ class MotionController:
                 time.sleep(0.05)
                 continue
 
-            x, y, yaw = self._bridge.get_pose()
+            rel_x, rel_y, yaw = self._bridge.get_pose(relative=True)
 
-            if rotation_target is not None:
-                error = normalize_angle(rotation_target - yaw)
-                if abs(error) <= YAW_TOLERANCE:
-                    self._bridge.send_velocity(0.0, 0.0)
-                    with self._lock:
-                        self._rotation_target = None
-                        self._cancel_requested = False
-                    self._notify_cb("align@done")
-                    time.sleep(0.05)
-                    continue
-
-                angular = max(-MAX_ANGULAR_SPEED, min(MAX_ANGULAR_SPEED, ANGULAR_KP * error))
-                self._bridge.send_velocity(0.0, angular)
+            if manual_active:
+                self._bridge.send_velocity(manual_linear, manual_angular)
                 time.sleep(0.05)
                 continue
-            dx = target[0] - x
-            dy = target[1] - y
+
+            dx = target[0] - rel_x
+            dy = target[1] - rel_y
             distance = math.hypot(dx, dy)
             forward = dx * math.cos(yaw) + dy * math.sin(yaw)
             lateral = -dx * math.sin(yaw) + dy * math.cos(yaw)
 
-            if distance <= goal_tolerance or forward <= 0.0:
+            if distance <= goal_tolerance:
                 self._bridge.send_velocity(0.0, 0.0)
                 with self._lock:
                     self._target = None
@@ -302,8 +298,6 @@ class MotionController:
             speed = max(min(speed, max_speed), min_speed)
             self._bridge.send_velocity(speed, 0.0)
             time.sleep(0.05)
-
-
 def configure_capture() -> Tuple[cv2.VideoCapture, float]:
     """카메라를 빠르게 초기화하고 센서 FPS를 반환."""
     cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
@@ -399,16 +393,24 @@ def handle_server_message(line: str, motion: Optional[MotionController]) -> None
         print("STOP 명령 수신: 즉시 정지합니다.")
         if motion is not None:
             motion.cancel()
-    elif line.startswith("ALIGN:"):
+    elif line.startswith("TURN:"):
         if motion is None:
             return
         try:
             _, payload = line.split(":", 1)
-            target_yaw = float(payload.strip())
+            parts = [p.strip() for p in payload.split(",") if p.strip()]
+            if not parts:
+                return
+            if len(parts) == 1:
+                linear = 0.0
+                angular = float(parts[0])
+            else:
+                linear = float(parts[0])
+                angular = float(parts[1])
         except ValueError:
-            print(f"ALIGN 명령 파싱 실패: {line}")
+            print(f"TURN 명령 파싱 실패: {line}")
             return
-        motion.align_to(target_yaw)
+        motion.set_manual_velocity(linear, angular)
     else:
         print(f"서버 메시지: {line}")
 
