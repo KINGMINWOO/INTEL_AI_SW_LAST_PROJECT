@@ -73,7 +73,7 @@ volatile uint8_t line_received = 0; // 명령어를 모두 받아왔을 때를 �
 volatile uint16_t ADC1xConvertValue[2] = {0}; // 0: 조도, 1: 공기질
 volatile int adcFlag = 0;
 /* ============ 자동 동작 임계값 조절 변수 ============= */
-volatile int airQuality = 2500, landEC = 1000;
+volatile int airQuality = 50, landEC = 1000;
 volatile float airTemp = 26.0, airHumi = 70.0, landHumi = 50.0, landPH = 6.5;
 /* ============ 펌프 타이머 상태 변수 ============= */
 volatile uint16_t g_water_ms_left = 0;     // 물 펌프 남은 시간(ms)
@@ -285,10 +285,10 @@ void UART6_HandleLine(void)
 	UART6_OnCommand(line);
 
     // 3) 에코: '\n' 하나 붙여서 UART6로 돌려보내기
-    if (n < RX_BUF_SIZE - 1) {
-        line[n++] = '\n';
-    }
-    HAL_UART_Transmit(&huart6, (uint8_t*)line, n, HAL_MAX_DELAY);
+//    if (n < RX_BUF_SIZE - 1) {
+//        line[n++] = '\n';
+//    }
+//    HAL_UART_Transmit(&huart6, (uint8_t*)line, n, HAL_MAX_DELAY);
 }
 
 /* =======================================명령어 처리============================================== */
@@ -322,69 +322,69 @@ __attribute__((weak)) void UART6_OnCommand(const char* line_in)
     	pToken = strtok(NULL, "[@]");
     }
 
-    if(!strcmp(pArray[1], "LED")) // 생장등 컨트롤
+    if(!strcmp(pArray[0], "LED")) // 생장등 컨트롤
     {
-    	if(!strcmp(pArray[2], "ON"))
+    	if(!strcmp(pArray[1], "ON"))
     	{
     		MX_GPIO_LED_ON(LD2_Pin);   // LD2 켬
     		__HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_4, 65535); // 생장등 최대
 			printf("LED ON\r\n");
     	}
-    	else if(!strcmp(pArray[2], "OFF"))
+    	else if(!strcmp(pArray[1], "OFF"))
     	{
     		MX_GPIO_LED_OFF(LD2_Pin);   // LD2 끔
     		__HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_4, 0); // 생장등 끔
 			printf("LED OFF\r\n");
     	}
-    	else if(!strcmp(pArray[2],"LOW"))
+    	else if(!strcmp(pArray[1],"LOW"))
     	{
     		__HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_4, 21854); // 생장등 LOW
     		printf("LED LOW\r\n");
     	}
-    	else if(!strcmp(pArray[2],"MID"))
+    	else if(!strcmp(pArray[1],"MID"))
     	{
     		__HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_4, 43690); // 생장등 MID
     		printf("LED MID\r\n");
     	}
-    	else if(!strcmp(pArray[2],"HIGH"))
+    	else if(!strcmp(pArray[1],"HIGH"))
     	{
     		__HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_4, 65535); // 생장등 HIGH
     		printf("LED HIGH\r\n");
     	}
     }
-    else if(!strcmp(pArray[1], "AIR")) // 실내 환경 임계 값 변경
+    else if(!strcmp(pArray[0], "AIR")) // 실내 환경 임계 값 변경
     {
-    	if(!strcmp(pArray[2], "TEMP"))
+    	if(!strcmp(pArray[1], "TEMP"))
     	{
-    		airTemp = atoff(pArray[3]);
+    		airTemp = atoff(pArray[2]);
     		printf("실내 온도 조정: %.1f\r\n", airTemp);
     	}
-    	else if(!strcmp(pArray[2], "HUMI"))
+    	else if(!strcmp(pArray[1], "HUMI"))
     	{
-    		airHumi = atoff(pArray[3]);
+    		airHumi = atoff(pArray[2]);
     		printf("실내 습도 조정: %.1f\r\n", airHumi);
     	}
-    	else if(!strcmp(pArray[2], "QUALITY"))
+    	else if(!strcmp(pArray[1], "QUALITY"))
     	{
-    		airQuality = atoi(pArray[3]);
+    		airQuality = atoi(pArray[2]);
     		printf("실내 공기질 조정: %d\r\n", airQuality);
     	}
     }
-    else if(!strcmp(pArray[1], "LAND")) // 토양 환경 임계 값 변경
+    else if(!strcmp(pArray[0], "LAND")) // 토양 환경 임계 값 변경
     {
-    	if(!strcmp(pArray[2], "PH"))
+    	if(!strcmp(pArray[1], "PH"))
     	{
-    		landPH = atoff(pArray[3]);
+    		landPH = atoff(pArray[2]);
     		printf("토양 PH 조정: %.1f\r\n", landPH);
     	}
-    	else if(!strcmp(pArray[2], "HUMI"))
+    	else if(!strcmp(pArray[1], "HUMI"))
     	{
-    		landHumi = atoff(pArray[3]);
+    		landHumi = atoff(pArray[2]);
     		printf("토양 습도 조정: %.1f\r\n", landHumi);
     	}
-    	else if(!strcmp(pArray[2], "EC"))
+    	else if(!strcmp(pArray[1], "EC"))
     	{
-    		landEC = atoi(pArray[3]);
+    		landEC = atoi(pArray[2]);
     		printf("토양 EC 조정: %d\r\n", landEC);
     	}
     }
@@ -404,12 +404,15 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 	static int channel = 0;
 	if (channel == 0)
 	{
-		ADC1xConvertValue[channel] = HAL_ADC_GetValue(hadc);
+		uint32_t reverse = (uint32_t)4095 - (uint32_t)HAL_ADC_GetValue(hadc);
+		uint32_t cds = (reverse * 100 + 2047) / 4095;
+		ADC1xConvertValue[channel] = cds;
 		channel = 1;
 	}
 	else if (channel == 1)
 	{
-		ADC1xConvertValue[channel] = HAL_ADC_GetValue(hadc);
+		uint32_t gas = ((uint32_t)HAL_ADC_GetValue(hadc) * 100 + 2047) / 4095;
+		ADC1xConvertValue[channel] = gas;
 		channel = 0;
 		adcFlag = 1;
 	}
@@ -425,7 +428,7 @@ void ADC_HandleLine(void)
 	printf("조도 : %d, 가스: %d\r\n", ADC1xConvertValue[0], ADC1xConvertValue[1]);
 }
 
-/* =======================================2초 동안 물 주기 함수============================================= */
+/* =======================================물 주기 함수============================================= */
 void WaterPump5Sec(void)
 {
     // 이미 동작 중이면 재시작하지 않고 무시
@@ -435,11 +438,11 @@ void WaterPump5Sec(void)
     }
 
     MX_GPIO_WATER_ON(WATER_Pin);
-    g_water_ms_left = 5000;   // 2초 = 2000ms (TIM3 콜백이 1ms마다 줄여서 OFF 처리)
+    g_water_ms_left = 5000;   // 5초
     printf("[WATER] ON\r\n");
 }
 
-/* =======================================1초 동안 영양제 주기 함수============================================= */
+/* =======================================영양제 주기 함수============================================= */
 void NutrientsPump2Sec(void)
 {
 	// 이미 동작 중이면 재시작하지 않고 무시
@@ -449,7 +452,7 @@ void NutrientsPump2Sec(void)
     }
 
     MX_GPIO_NUTRIENTS_ON(NUTRIENTS_Pin);
-    g_nutr_ms_left = 2000;    // 1초 = 1000ms
+    g_nutr_ms_left = 2000;    // 2초
     printf("[NUTRIENTS] ON\r\n");
 }
 
@@ -516,12 +519,18 @@ void DB_UART6(void)
     int n = snprintf((char*)sendBuf, sizeof(sendBuf),
                      "AIR@%.1f@%.1f@%d@%d\n",
                      d.temperature, d.humidity, ADC1xConvertValue[0], ADC1xConvertValue[1]);
-    if (n > 0) HAL_UART_Transmit(&huart6, sendBuf, (uint16_t)n, HAL_MAX_DELAY);
+    if (n > 0) {
+    	HAL_UART_Transmit(&huart6, sendBuf, (uint16_t)n, HAL_MAX_DELAY);
+    	printf("%s\r\n", sendBuf);
+    }
 
     n = snprintf((char*)sendBuf, sizeof(sendBuf),
                  "LAND@%.1f@%.1f@%.1f@%d\n",
                  temp, humi, ph, ec);
-    if (n > 0) HAL_UART_Transmit(&huart6, sendBuf, (uint16_t)n, HAL_MAX_DELAY);
+    if (n > 0) {
+    	HAL_UART_Transmit(&huart6, sendBuf, (uint16_t)n, HAL_MAX_DELAY);
+    	printf("%s\r\n", sendBuf);
+    }
 }
 /* USER CODE END 0 */
 
@@ -608,7 +617,7 @@ int main(void)
 
 		  if(!(tim3Sec%10)) //10초에 한 번
 		  {
-			  // 온도, 습도, EC, PH값 읽고 출력
+			  // (토양)온도, 습도, EC, PH값 읽고 출력
 			  ReadTempHumECPH();
 		  }
 	  }
@@ -622,7 +631,7 @@ int main(void)
 
 		  if (!(tim3Min % 5)) // 5분에 한 번
 		  {
-			  DB_UART6();
+			  DB_UART6(); // DB에 생장 환경 데이터 전송
 		  }
 	  }
 
