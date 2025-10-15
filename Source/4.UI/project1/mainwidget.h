@@ -22,6 +22,12 @@ public:
     MainWidget(QWidget *parent = nullptr);
     ~MainWidget();
 
+public slots:
+    void bringToFront();
+
+protected:
+    void closeEvent(QCloseEvent* e) override;
+
 private:
     Ui::MainWidget *ui;
     Tab1_button *pTab1_button;

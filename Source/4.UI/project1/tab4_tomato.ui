@@ -101,7 +101,7 @@
            </font>
           </property>
           <property name="text">
-           <string>익은 토마토</string>
+           <string>수확 개수(개)</string>
           </property>
           <property name="alignment">
            <set>Qt::AlignCenter</set>
@@ -147,7 +147,7 @@
            </font>
           </property>
           <property name="text">
-           <string>썩은 토마토</string>
+           <string>폐기 개수(개)</string>
           </property>
           <property name="alignment">
            <set>Qt::AlignCenter</set>
@@ -193,7 +193,7 @@
            </font>
           </property>
           <property name="text">
-           <string>익은 비율</string>
+           <string>수확 비율(%)</string>
           </property>
           <property name="alignment">
            <set>Qt::AlignCenter</set>
@@ -231,7 +231,7 @@
       <item row="0" column="0">
        <widget class="QLabel" name="label_8">
         <property name="text">
-         <string>실내 온도</string>
+         <string>실내 온도(°C)</string>
         </property>
         <property name="alignment">
          <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
@@ -244,7 +244,7 @@
       <item row="0" column="2">
        <widget class="QLabel" name="label_9">
         <property name="text">
-         <string>토양 온도</string>
+         <string>토양 온도(°C)</string>
         </property>
         <property name="alignment">
          <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
@@ -254,7 +254,7 @@
       <item row="1" column="0">
        <widget class="QLabel" name="label_11">
         <property name="text">
-         <string>실내 습도</string>
+         <string>실내 습도(%RH)</string>
         </property>
         <property name="alignment">
          <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
@@ -264,7 +264,7 @@
       <item row="2" column="0">
        <widget class="QLabel" name="label_13">
         <property name="text">
-         <string>실내 공기질</string>
+         <string>실내 공기질(index)</string>
         </property>
         <property name="alignment">
          <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
@@ -289,7 +289,7 @@
       <item row="1" column="2">
        <widget class="QLabel" name="label_10">
         <property name="text">
-         <string>토양 습도</string>
+         <string>토양 습도(%)</string>
         </property>
         <property name="alignment">
          <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
@@ -299,7 +299,7 @@
       <item row="2" column="2">
        <widget class="QLabel" name="label_12">
         <property name="text">
-         <string>토양 EC</string>
+         <string>토양 EC(µS/cm)</string>
         </property>
         <property name="alignment">
          <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
@@ -315,7 +315,7 @@
       <item row="3" column="2">
        <widget class="QLabel" name="label_15">
         <property name="text">
-         <string>토양 PH</string>
+         <string>토양 PH(pH)</string>
         </property>
         <property name="alignment">
          <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
@@ -325,7 +325,7 @@
       <item row="3" column="0">
        <widget class="QLabel" name="label_14">
         <property name="text">
-         <string>실내 조도</string>
+         <string>실내 조도(lux)</string>
         </property>
         <property name="alignment">
          <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>

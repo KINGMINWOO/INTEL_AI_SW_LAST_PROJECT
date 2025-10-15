@@ -124,7 +124,6 @@ void ChangeSetting::setMode(Mode m, int current, int minVal, int maxVal)
 
         if (ui->pLblLed) {
             ui->pLblLed->setVisible(true);
-            // (옵션) LCD풍 폰트 적용
             static bool s_loaded = false;
             static QString s_family;
             if (!s_loaded) {
@@ -181,7 +180,6 @@ void ChangeSetting::setMode(Mode m, int current, int minVal, int maxVal)
         return;
     }
 
-    // ── 숫자 모드 ──
     m_value = current;
     m_min   = minVal;
     m_max   = maxVal;
@@ -252,19 +250,16 @@ void ChangeSetting::onAccepted()
         if (!ui->pDialtime) { accept(); return; }
 
         const int SPAN = 24;
-        const int BOTTOM_TO_TOP = 12;                 // ★ 같은 값 사용
-        // 다이얼값(아래 기준) → 위 기준 스텝
+        const int BOTTOM_TO_TOP = 12;
         int t = (ui->pDialtime->value() + SPAN - BOTTOM_TO_TOP) % SPAN;  // 0..23
 
         int hour12 = t / 2;            // 0..11 (0=12)
         int minute = (t % 2) * 30;
 
-        // 24시간 변환: AM 그대로, PM만 +12
         const bool isPm = (ui->pBpm && ui->pBpm->isChecked());
-        int h12 = (hour12 == 12) ? 0 : hour12;       // 12 → 0
-        int sendHour = isPm ? (h12 + 12) : h12;
+        int sendHour = isPm ? (hour12 + 12) : hour12;
 
-        emit decided(m_mode, sendHour * 60 + minute);  // 분 단위
+        emit decided(m_mode, sendHour * 60 + minute);
         accept();
         return;
     }
@@ -314,7 +309,6 @@ void ChangeSetting::updateTimeFromDial(int dialVal)
 
     int hour12 = t / 2;            // 0..11 (0=12)
     int minute = (t % 2) * 30;     // 0 or 30
-    if (hour12 == 0) hour12 = 12;  // 0 → 12
 
     if (ui->pTime) {
         ui->pTime->display(QString("%1:%2")

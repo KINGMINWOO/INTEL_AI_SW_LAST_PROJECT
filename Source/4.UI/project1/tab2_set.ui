@@ -217,7 +217,7 @@
    <item>
     <layout class="QHBoxLayout" name="horizontalLayout_3" stretch="3,1,5,1">
      <item>
-      <widget class="QLCDNumber" name="lcdNumber"/>
+      <widget class="QLCDNumber" name="pLcdtime"/>
      </item>
      <item>
       <widget class="QPushButton" name="pPBtime">

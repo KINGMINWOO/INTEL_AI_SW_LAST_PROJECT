@@ -30,10 +30,10 @@ private slots:
     void socketReadDataSlot();
     void socketErrorSlot();
     void socketConnectServerSlot();
+    void socketDisconnectedSlot();
 
 public slots:
     void connectToServerSlot(bool &);
-    void socketClosedServerSlot();
     void socketWriteDataSlot(QString);
 private:
     bool m_startSent = false;

@@ -1,5 +1,7 @@
 #include "mainwidget.h"
 #include "ui_mainwidget.h"
+#include <QCloseEvent>
+#include <QTimer>
 
 MainWidget::MainWidget(QWidget *parent)
     : QWidget(parent)
@@ -9,8 +11,10 @@ MainWidget::MainWidget(QWidget *parent)
 
     pSocketClient = new SocketClient(this);
 
+    ui->stackedWidget->setCurrentWidget(ui->pTab1);
+
     QTimer::singleShot(0, this, [this](){
-        bool askIpPopup = false;
+        bool askIpPopup = true;
         pSocketClient->connectToServerSlot(askIpPopup);
     });
 
@@ -24,6 +28,16 @@ MainWidget::MainWidget(QWidget *parent)
     ui->pTab3->setLayout(pTab3_cctv->layout());
 
     pTab4_tomato = new Tab4_tomato(ui->pTab4);
+    pTab4_tomato->setDbParams(
+        "10.10.16.29",   // DB 호스트
+        3306,             // 포트
+        "smart_farm",      // DB 이름
+        "user01",         // 사용자
+        "user1234" // 비밀번호
+    );
+
+    Tab4_tomato::Schema sch;
+    pTab4_tomato->setSchema(sch);
     ui->pTab4->setLayout(pTab4_tomato->layout());
 
     connect(pTab1_button, &Tab1_button::goToTab2, this, [this](){
@@ -52,6 +66,22 @@ MainWidget::MainWidget(QWidget *parent)
         ui->stackedWidget->setCurrentWidget(ui->pTab1);
     });
 
+    connect(pSocketClient, &SocketClient::socketRecvDataSig,
+            pTab2_set,     &Tab2_set::onSocketMessage);
+}
+
+void MainWidget::closeEvent(QCloseEvent *e)
+{
+    e->ignore();
+    ui->stackedWidget->setCurrentWidget(ui->pTab1);
+    this->hide();
+}
+
+void MainWidget::bringToFront()
+{
+    this->showNormal();
+    this->raise();
+    this->activateWindow();
 }
 
 MainWidget::~MainWidget()
