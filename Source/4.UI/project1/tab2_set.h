@@ -24,9 +24,6 @@ signals:
     void goToHome();
     void sendToServer(const QString& msg);
 
-public slots:
-    void onSocketMessage(const QString& msg);
-
 private slots:
     // 버튼 핸들러
     void on_pPBAtemp_clicked();
@@ -65,9 +62,6 @@ private:
 
     // UI 반영
     void refreshUiFromCurrent();
-
-    // 서버 수신 파싱
-    bool parseCCTV01(const QString& msg);
 
     // 다이얼로그 유틸
     void openSetting(ChangeSetting::Mode mode, int current, int minVal, int maxVal);

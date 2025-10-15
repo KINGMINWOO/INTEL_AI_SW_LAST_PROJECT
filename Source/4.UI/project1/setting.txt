@@ -1,14 +1,14 @@
 [AIR]
-air=2
+air=4
 humi=48
 illu=300
-temp=20
+temp=17
 
 [LAND]
 ec=2
 humi=26
-ph=7
+ph=5
 
 [SYS]
-led=1
-time=16:00
+led=3
+time=13:45

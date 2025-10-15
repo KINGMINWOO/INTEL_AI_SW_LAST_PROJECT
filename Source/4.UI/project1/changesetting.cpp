@@ -11,8 +11,14 @@
 #include <QtMath>
 #include <QFontDatabase>
 #include <QFile>
+#include <QFileInfo>
+#include <QTime>
+#include <QSettings>
+#include <QCoreApplication>
+#include <QDir>
+#include <QSignalBlocker>
 
-// ======================== 상수/헬퍼 ========================
+// ======================== 헬퍼/상수 ========================
 static inline QString ledText(int idx)
 {
     switch (idx) {
@@ -24,13 +30,40 @@ static inline QString ledText(int idx)
     return "OFF";
 }
 
-// 12시간 × 30분 = 24 스텝(half-hour)
-static constexpr int kSpan = 24;
+// Tab2와 동일한 설정 파일 경로 규칙
+static inline QString settingsPath() {
+    // 0) 환경변수 우선
+    const QByteArray v = qgetenv("SETTINGS_FILE");
+    if (!v.isEmpty()) {
+        const QString p = QString::fromLocal8Bit(v);
+        QDir().mkpath(QFileInfo(p).path());
+        return QDir::cleanPath(p);
+    }
 
-// 화면상 포인터는 위(12시)에서 시작하지만, pTime 표시가 9시로 어긋나던 현상 보정.
-// 1시간 = 2스텝 → 9시간 = 18스텝.
-// 필요 시 6(=3시), 12(=6시), 18(=9시)로 미세조정 가능.
-static constexpr int kDisplayOffset = 18; // (참고용: 현재 로직은 BOTTOM_TO_TOP=12 방식 사용)
+    // 1) 라즈베리파이: NFS 고정 경로
+    QFile f("/proc/device-tree/model");
+    bool isPi = false;
+    if (f.exists() && f.open(QIODevice::ReadOnly)) {
+        const QByteArray model = f.readAll();
+        isPi = model.contains("Raspberry Pi");
+    }
+    if (isPi) {
+        const QString nfsPath = "/mnt/nfs_ubuntu/project1/setting.txt";
+        QDir().mkpath(QFileInfo(nfsPath).path());
+        return QDir::cleanPath(nfsPath);
+    }
+
+    // 2) 일반: 실행파일 디렉터리/setting.txt
+    const QString appDir = QCoreApplication::applicationDirPath();
+    QString srcPath = QDir(appDir).absoluteFilePath("setting.txt");
+    srcPath = QDir::cleanPath(srcPath);
+    QDir().mkpath(QFileInfo(srcPath).path());
+    return srcPath;
+}
+
+// 다이얼: 12시간 × 30분 = 24눈금, 눈금 사이 표시용까지 48스텝
+static constexpr int kDialSteps        = 48;  // 0..47
+static constexpr int kBottomToTopSteps = 24;  // 보정
 
 // ======================== 본체 ========================
 ChangeSetting::ChangeSetting(QWidget *parent)
@@ -39,7 +72,7 @@ ChangeSetting::ChangeSetting(QWidget *parent)
 {
     ui->setupUi(this);
 
-    // Up/Down 연결 + 오토리핏
+    // Up/Down + 오토리핏
     connect(ui->pPBup,   &QPushButton::clicked, this, &ChangeSetting::onUp);
     connect(ui->pPBdown, &QPushButton::clicked, this, &ChangeSetting::onDown);
     if (ui->pPBup) {
@@ -60,43 +93,63 @@ ChangeSetting::ChangeSetting(QWidget *parent)
     // 숫자 LCD 기본 스타일
     if (ui->set) ui->set->setSegmentStyle(QLCDNumber::Filled);
 
-    // ===== LED 슬라이더 초기화 =====
+    // LED 슬라이더
     if (ui->pSliderLed) {
-        ui->pSliderLed->setRange(0, 3);     // 0~3만 사용 (0=OFF,1=LOW,2=MID,3=HIGH)
+        ui->pSliderLed->setRange(0, 3);
         ui->pSliderLed->setSingleStep(1);
         ui->pSliderLed->setPageStep(1);
-
         connect(ui->pSliderLed, &QSlider::valueChanged, this, [this](int v){
-            if (m_mode != Mode::LED) return;         // LED 모드에서만 반응
+            if (m_mode != Mode::LED) return;
             int nv = qBound(0, v, 3);
             if (m_led != nv) {
                 m_led = nv;
-                updateView();                         // 라벨 텍스트 갱신
-                emit valueChanged(m_led);             // 실시간 변경 알림(필요 시)
+                updateView();
+                emit valueChanged(m_led);
             }
         });
     }
 
-    // ===== TIME 페이지 초기화 =====
-    // 12시간 × 30분 = 24 스텝(0..23)
+    // TIME 다이얼
     if (ui->pDialtime) {
-        ui->pDialtime->setRange(0, kSpan - 1);
-        ui->pDialtime->setSingleStep(1);   // 30분 단위
-        ui->pDialtime->setPageStep(4);     // 2시간(=4스텝)
+        ui->pDialtime->setRange(0, kDialSteps - 1);
+        ui->pDialtime->setSingleStep(2);      // 30분 단위만
+        ui->pDialtime->setPageStep(2);
         ui->pDialtime->setWrapping(true);
-        ui->pDialtime->setNotchesVisible(true);
+        ui->pDialtime->setNotchesVisible(false); // ★ 기본 눈금 끔
 
         connect(ui->pDialtime, &QDial::valueChanged, this, [this](int v){
-            updateTimeFromDial(v);
+            // 다이얼 조작 → 정확 모드 해제
+            m_nowExactActive = false;
+
+            // 홀수값 들어오면 짝수로 스냅
+            int t = (v + kDialSteps - kBottomToTopSteps) % kDialSteps; // 0..47 (위 기준)
+            if (t % 2 != 0) {
+                int even = (t < kDialSteps-1 ? t+1 : t-1);
+                int desired = (even + kBottomToTopSteps) % kDialSteps;
+                QSignalBlocker b(ui->pDialtime);
+                ui->pDialtime->setValue(desired);
+                t = even;
+            }
+            updateTimeFromDial((t + kBottomToTopSteps) % kDialSteps);
         });
     }
-    // AM/PM 토글 시에도 표시 갱신(표시는 12시간제로 동일하지만 타이핑 일관성 유지)
+
+    // AM/PM 토글: 사용자 조작 시에만 정확모드 해제
     if (ui->pBam) connect(ui->pBam, &QRadioButton::toggled, this, [this](bool){
+        m_nowExactActive = false;                              // ★ 사용자 토글 시
         if (ui->pDialtime) updateTimeFromDial(ui->pDialtime->value());
     });
     if (ui->pBpm) connect(ui->pBpm, &QRadioButton::toggled, this, [this](bool){
+        m_nowExactActive = false;                              // ★ 사용자 토글 시
         if (ui->pDialtime) updateTimeFromDial(ui->pDialtime->value());
     });
+
+    // NOW 버튼: 정확 모드 ON
+    if (ui->pPBnow) {
+        connect(ui->pPBnow, &QPushButton::clicked, this, [this]{
+            updateTimeFromDial(-1); // 내부에서 m_nowExactActive=true
+        });
+    }
 }
 
 ChangeSetting::~ChangeSetting()
@@ -108,7 +161,7 @@ void ChangeSetting::setMode(Mode m, int current, int minVal, int maxVal)
 {
     m_mode = m;
 
-    // 보여줄 페이지 전환
+    // 페이지 전환
     if (ui->stackedWidget) {
         QWidget* target = nullptr;
         switch (m_mode) {
@@ -119,6 +172,7 @@ void ChangeSetting::setMode(Mode m, int current, int minVal, int maxVal)
         if (target) ui->stackedWidget->setCurrentWidget(target);
     }
 
+    // ───────── LED ─────────
     if (m_mode == Mode::LED) {
         m_led = qBound(0, current, 3);
 
@@ -141,45 +195,77 @@ void ChangeSetting::setMode(Mode m, int current, int minVal, int maxVal)
                 ui->pLblLed->setFont(f);
             }
         }
-
         if (ui->pSliderLed) {
-            if (ui->pSliderLed->maximum() != 3)
-                ui->pSliderLed->setMaximum(3); // .ui에서 4로 되어 있어도 여기서 보정
-            ui->pSliderLed->setValue(m_led);   // 슬라이더 위치 동기화
+            if (ui->pSliderLed->maximum() != 3) ui->pSliderLed->setMaximum(3);
+            ui->pSliderLed->setValue(m_led);
         }
-
         if (ui->set) ui->set->setVisible(false);
         updateView();
         return;
     }
 
+    // ───────── TIME ─────────
     if (m_mode == Mode::TIME) {
-        int minutes = qMax(0, current);
-        minutes = (minutes / 30) * 30;               // 30분 스냅
+        // 1) setting.txt에서 HH:MM 읽기(없으면 current)
+        int minutesExact = -1; // 0..1439
+        {
+            const QString p = settingsPath();
+            QSettings s(p, QSettings::IniFormat);
+            s.beginGroup("SYS");
+            const QString tv = s.value("time").toString().trimmed(); // "HH:MM"
+            s.endGroup();
+            const QTime t = QTime::fromString(tv, "HH:mm");
+            if (t.isValid()) minutesExact = t.hour()*60 + t.minute();
+        }
+        if (minutesExact < 0) minutesExact = qMax(0, current);  // fallback
 
-        const int SPAN = 24;
-        const int BOTTOM_TO_TOP = 12;                // ★ 아래(0) → 위(0) 보정 = 12스텝
+        // 12시간 기준
+        const int hh24     = (minutesExact / 60) % 24;
+        const int mm       = minutesExact % 60;
+        const int minutes12 = (hh24 % 12) * 60 + mm; // 0..719
+        const int baseHalf  = minutes12 / 30;        // 0..23
+        const int rem       = minutes12 % 30;        // 0..29
 
-        // 위(12시)=0 기준 half-step (0..23)
-        int stepFromTop = (minutes / 30) % SPAN;
+        if (ui->set)     ui->set->setVisible(false);
+        if (ui->pLblLed) ui->pLblLed->setVisible(false);
 
-        // (위 기준 스텝) → (다이얼=아래 기준 값)으로 변환해서 setValue
-        int dialVal = (stepFromTop + BOTTOM_TO_TOP) % SPAN;   // ★ 포인터를 '위'에 보이게
-        if (ui->pDialtime) ui->pDialtime->setValue(dialVal);
+        // 2) 다이얼 값 설정(신호 차단)
+        if (ui->pDialtime) {
+            QSignalBlocker blockDial(ui->pDialtime);
+            ui->pDialtime->setRange(0, kDialSteps - 1);
+            ui->pDialtime->setSingleStep(2);
+            ui->pDialtime->setPageStep(2);
+            ui->pDialtime->setWrapping(true);
+            ui->pDialtime->setNotchesVisible(false);
 
-        // AM/PM 기본 선택
+            int sBase = baseHalf * 2 + (rem == 0 ? 0 : 1); // rem>0이면 언저리(홀수)
+            int dialVal = (sBase + kBottomToTopSteps) % kDialSteps;
+            ui->pDialtime->setValue(dialVal);
+        }
+
+        // 3) LCD 정확 분 표시
+        if (ui->pTime) {
+            const int h12 = hh24 % 12;
+            const int dispHour = (h12 == 0 ? 12 : h12);
+            ui->pTime->display(QString("%1:%2")
+                               .arg(dispHour, 2, 10, QChar('0'))
+                               .arg(mm,       2, 10, QChar('0')));
+        }
+
+        // 4) AM/PM 체크 설정 시 **신호 차단**으로 정확모드 보존
         if (ui->pBam && ui->pBpm) {
-            int hh24 = (minutes / 60) % 24;
+            QSignalBlocker blockAm(ui->pBam);
+            QSignalBlocker blockPm(ui->pBpm);
             (hh24 >= 12) ? ui->pBpm->setChecked(true) : ui->pBam->setChecked(true);
         }
 
-        if (ui->set) ui->set->setVisible(false);
-        if (ui->pLblLed) ui->pLblLed->setVisible(false);
-
-        if (ui->pDialtime) updateTimeFromDial(ui->pDialtime->value());
+        // 5) 초기 상태는 '정확 모드'
+        m_nowExactActive  = true;
+        m_nowExactMinutes = minutesExact;
         return;
     }
 
+    // ───────── 숫자 ─────────
     m_value = current;
     m_min   = minVal;
     m_max   = maxVal;
@@ -200,13 +286,15 @@ void ChangeSetting::onUp()
         }
         return;
     }
-
     if (m_mode == Mode::TIME) {
-        if (ui->pDialtime)
-            ui->pDialtime->setValue( (ui->pDialtime->value() + 1) % kSpan ); // +30분
+        if (ui->pDialtime) {
+            int v = (ui->pDialtime->value() + 2) % kDialSteps; // +30분
+            QSignalBlocker b(ui->pDialtime);
+            ui->pDialtime->setValue(v);
+            updateTimeFromDial(v);
+        }
         return;
     }
-
     if (m_value < m_max) {
         ++m_value;
         updateView();
@@ -224,13 +312,15 @@ void ChangeSetting::onDown()
         }
         return;
     }
-
     if (m_mode == Mode::TIME) {
-        if (ui->pDialtime)
-            ui->pDialtime->setValue( (ui->pDialtime->value() + kSpan - 1) % kSpan ); // -30분
+        if (ui->pDialtime) {
+            int v = (ui->pDialtime->value() + kDialSteps - 2) % kDialSteps; // -30분
+            QSignalBlocker b(ui->pDialtime);
+            ui->pDialtime->setValue(v);
+            updateTimeFromDial(v);
+        }
         return;
     }
-
     if (m_value > m_min) {
         --m_value;
         updateView();
@@ -241,30 +331,58 @@ void ChangeSetting::onDown()
 void ChangeSetting::onAccepted()
 {
     if (m_mode == Mode::LED) {
-        emit decided(m_mode, m_led);   // 0~3
+        emit decided(m_mode, m_led);
         accept();
         return;
     }
 
     if (m_mode == Mode::TIME) {
+        // 정확 모드면 NOW(-1) 처리
+        if (m_nowExactActive) {
+            const int minutes = qMax(0, m_nowExactMinutes) % (24*60);
+            const QString hhmm = QString("%1:%2")
+                                     .arg((minutes/60)%24, 2, 10, QChar('0'))
+                                     .arg(minutes%60,      2, 10, QChar('0'));
+            const QString p = settingsPath();
+            QSettings s(p, QSettings::IniFormat);
+            s.setValue("SYS/time", hhmm);
+            s.sync();
+
+            emit decided(m_mode, -1);
+            accept();
+            return;
+        }
+
+        // 다이얼(짝수) + AM/PM 반영 저장
         if (!ui->pDialtime) { accept(); return; }
 
-        const int SPAN = 24;
-        const int BOTTOM_TO_TOP = 12;
-        int t = (ui->pDialtime->value() + SPAN - BOTTOM_TO_TOP) % SPAN;  // 0..23
+        int v = ui->pDialtime->value();
+        int t = (v + kDialSteps - kBottomToTopSteps) % kDialSteps; // 0..47
+        if (t % 2 != 0) t -= 1;
 
-        int hour12 = t / 2;            // 0..11 (0=12)
-        int minute = (t % 2) * 30;
+        const int halfIdx = t / 2;         // 0..23
+        const int hour12  = halfIdx / 2;   // 0..11
+        const int minute  = (halfIdx % 2) * 30;
 
         const bool isPm = (ui->pBpm && ui->pBpm->isChecked());
-        int sendHour = isPm ? (hour12 + 12) : hour12;
+        int hh24 = isPm ? ((hour12 + 12) % 24) : hour12;
 
-        emit decided(m_mode, sendHour * 60 + minute);
+        const int minutes = hh24*60 + minute;
+        const QString hhmm = QString("%1:%2")
+                                 .arg((minutes/60)%24, 2, 10, QChar('0'))
+                                 .arg(minutes%60,      2, 10, QChar('0'));
+        const QString p = settingsPath();
+        QSettings s(p, QSettings::IniFormat);
+        s.setValue("SYS/time", hhmm);
+        s.sync();
+
+        emit decided(m_mode, minutes);
         accept();
         return;
     }
 
-    emit decided(m_mode, m_value); // 숫자 모드
+    // 숫자 모드
+    emit decided(m_mode, m_value);
     accept();
 }
 
@@ -279,12 +397,29 @@ void ChangeSetting::updateView()
     if (m_mode == Mode::LED) {
         if (ui->pLblLed) ui->pLblLed->setText(ledText(m_led));
         if (ui->pSliderLed && ui->pSliderLed->value() != m_led)
-            ui->pSliderLed->setValue(m_led);   // 버튼으로 바꿔도 슬라이더 위치 맞추기
+            ui->pSliderLed->setValue(m_led);
         return;
     }
 
     if (m_mode == Mode::TIME) {
-        if (ui->pDialtime) updateTimeFromDial(ui->pDialtime->value());
+        if (m_nowExactActive) {
+            const int minutes = qMax(0, m_nowExactMinutes) % (24*60);
+            const int hh24    = (minutes / 60) % 24;
+            const int mm      = minutes % 60;
+            const int h12     = hh24 % 12;
+            const int disp    = (h12 == 0 ? 12 : h12);
+            if (ui->pTime) {
+                ui->pTime->display(QString("%1:%2")
+                                   .arg(disp, 2, 10, QChar('0'))
+                                   .arg(mm,   2, 10, QChar('0')));
+            }
+            if (ui->pBam && ui->pBpm) {
+                // 여기서는 신호 차단 없이 읽기만 함
+                (hh24 >= 12) ? ui->pBpm->setChecked(true) : ui->pBam->setChecked(true);
+            }
+        } else {
+            if (ui->pDialtime) updateTimeFromDial(ui->pDialtime->value());
+        }
         return;
     }
 
@@ -302,17 +437,55 @@ void ChangeSetting::updateView()
 
 void ChangeSetting::updateTimeFromDial(int dialVal)
 {
-    const int SPAN = 24;
-    const int BOTTOM_TO_TOP = 12;
+    // NOW: LCD는 정확 분, 다이얼은 언저리/정확 위치
+    if (dialVal == -1) {
+        const QTime now = QTime::currentTime();
+        const int minutesExact = now.hour()*60 + now.minute();
+        const int minutes12    = (now.hour()%12)*60 + now.minute();
 
-    int t = (dialVal + SPAN - BOTTOM_TO_TOP) % SPAN;   // 0..23 (위 기준)
+        // LCD 정확 표시
+        if (ui->pTime) {
+            const int h12 = now.hour() % 12;
+            const int disp = (h12 == 0 ? 12 : h12);
+            ui->pTime->display(QString("%1:%2")
+                               .arg(disp, 2, 10, QChar('0'))
+                               .arg(now.minute(), 2, 10, QChar('0')));
+        }
+        if (ui->pBam && ui->pBpm) {
+            QSignalBlocker blockAm(ui->pBam);
+            QSignalBlocker blockPm(ui->pBpm);
+            (now.hour() >= 12) ? ui->pBpm->setChecked(true) : ui->pBam->setChecked(true);
+        }
 
-    int hour12 = t / 2;            // 0..11 (0=12)
-    int minute = (t % 2) * 30;     // 0 or 30
+        if (ui->pDialtime) {
+            const int baseHalf = minutes12 / 30; // 0..23
+            const int rem      = minutes12 % 30; // 0..29
+            int sBase = baseHalf * 2 + (rem == 0 ? 0 : 1); // rem>0 → 홀수
+            int desired = (sBase + kBottomToTopSteps) % kDialSteps;
+            QSignalBlocker b(ui->pDialtime);
+            ui->pDialtime->setValue(desired);
+        }
+
+        m_nowExactActive  = true;
+        m_nowExactMinutes = minutesExact;
+        return;
+    }
+
+    // 일반: 다이얼(짝수 스냅) → 00/30 표시
+    int v = dialVal;
+    int t = (v + kBottomToTopSteps) % kDialSteps; // 이미 위 기준 값으로 들어옴
+    // 안전: 혹시 홀수면 짝수로
+    int tTop = (v + kDialSteps - kBottomToTopSteps) % kDialSteps;
+    if (tTop % 2 != 0) tTop -= 1;
+
+    const int halfIdx = tTop / 2;       // 0..23
+    const int hour12  = halfIdx / 2;    // 0..11
+    const int minute  = (halfIdx % 2) * 30;
+    const int dispHour = (hour12 == 0 ? 12 : hour12);
 
     if (ui->pTime) {
         ui->pTime->display(QString("%1:%2")
-                           .arg(hour12, 2, 10, QChar('0'))
-                           .arg(minute,  2, 10, QChar('0')));
+                           .arg(dispHour, 2, 10, QChar('0'))
+                           .arg(minute,   2, 10, QChar('0')));
     }
 }

@@ -66,8 +66,6 @@ MainWidget::MainWidget(QWidget *parent)
         ui->stackedWidget->setCurrentWidget(ui->pTab1);
     });
 
-    connect(pSocketClient, &SocketClient::socketRecvDataSig,
-            pTab2_set,     &Tab2_set::onSocketMessage);
 }
 
 void MainWidget::closeEvent(QCloseEvent *e)

@@ -47,6 +47,8 @@ private:
 
     // LED 모드 전용 (0:OFF, 1:LOW, 2:MID, 3:HIGH)
     int   m_led   { 0 };
+    bool m_nowExactActive = false;
+    int  m_nowExactMinutes = 0;
 };
 
 #endif // CHANGESETTING_H

@@ -28,49 +28,33 @@ static inline QString ledText(int idx) {
     return "OFF";
 }
 
-// ===== 플랫폼별 설정 파일 경로 결정 =====
-
-// (옵션) 환경변수로 강제 지정: SETTINGS_FILE=/path/to/setting.txt
-static inline QString envSettingsFile() {
-    const QByteArray v = qgetenv("SETTINGS_FILE");
-    return v.isEmpty() ? QString() : QString::fromLocal8Bit(v);
-}
-
-// 라즈베리파이 런타임 감지: /proc/device-tree/model 확인
-static inline bool isRaspberryPi() {
-    QFile f("/proc/device-tree/model");
-    if (!f.exists() || !f.open(QIODevice::ReadOnly)) return false;
-    const QByteArray model = f.readAll();
-    return model.contains("Raspberry Pi");
-}
-
-// 설정 파일 경로:
-// 0) 환경변수 SETTINGS_FILE 지정 시 그 파일
-// 1) 라즈베리파이: /mnt/nfs_ubuntu/project1/setting.txt
-// 2) (우분투 등) 실행파일 기준 ../../setting.txt (소스 루트 상정)
-// 3) 폴백: 빌드 폴더 하위 project1/setting.txt
 static inline QString settingsPath() {
-    const QString env = envSettingsFile();
-    if (!env.isEmpty() && QFile::exists(env))
-        return env;
-
-    if (isRaspberryPi()) {
-        const QString nfsPath = "/mnt/nfs_ubuntu/project1/setting.txt";
-        if (QFile::exists(nfsPath))
-            return nfsPath;
-        // 필요 시 존재체크 없이 nfsPath를 그대로 반환해도 됨
+    // 0) 환경변수 우선
+    const QByteArray v = qgetenv("SETTINGS_FILE");
+    if (!v.isEmpty()) {
+        const QString p = QString::fromLocal8Bit(v);
+        // 부모 디렉터리 만들어두기
+        QDir().mkpath(QFileInfo(p).path());
+        return QDir::cleanPath(p);
     }
 
+    // 1) 라즈베리파이: NFS 고정 경로 (존재 체크 없이 반환)
+    QFile f("/proc/device-tree/model");
+    bool isPi = false;
+    if (f.exists() && f.open(QIODevice::ReadOnly)) {
+        const QByteArray model = f.readAll();
+        isPi = model.contains("Raspberry Pi");
+    }
+    if (isPi) {
+        const QString nfsPath = "/mnt/nfs_ubuntu/project1/setting.txt";
+        QDir().mkpath(QFileInfo(nfsPath).path());
+        return QDir::cleanPath(nfsPath);
+    }
     const QString appDir = QCoreApplication::applicationDirPath();
-    QString srcPath = QDir(appDir).absoluteFilePath("../../setting.txt");
+    QString srcPath = QDir(appDir).absoluteFilePath("setting.txt");
     srcPath = QDir::cleanPath(srcPath);
-    if (QFile::exists(srcPath))
-        return srcPath;
-
-    QString buildPath = QDir(appDir).absoluteFilePath("project1/setting.txt");
-    buildPath = QDir::cleanPath(buildPath);
-    QDir().mkpath(QFileInfo(buildPath).path());
-    return buildPath;
+    QDir().mkpath(QFileInfo(srcPath).path());
+    return srcPath;
 }
 // ──────────────────────────────
 
@@ -235,41 +219,64 @@ void Tab2_set::refreshUiFromCurrent()
     }
 }
 
-// ===== OK 눌렀을 때 =====
+// ===== OK/Now 눌렀을 때 =====
+// ===== OK/Now 눌렀을 때 =====
 void Tab2_set::onSettingDecided(ChangeSetting::Mode mode, int value)
 {
-    auto send = [&](const QString& payload){
+    auto sendCCTV = [&](const QString& payload){
         const QString msg = QString("[CCTV01]%1").arg(payload);
         emit sendToServer(msg);
         qDebug() << "[Tab2_set] sendToServer:" << msg;
     };
 
+    // ─── LED ───
     if (mode == ChangeSetting::Mode::LED) {
+        // ChangeSetting이 이미 파일에 저장했더라도, 혹시 모를 불일치 방지:
+        // 1) 내부 상태 업데이트 → 2) 파일 저장 → 3) 파일에서 다시 읽어 LCD를 "파일값"으로 맞춤
         m_ledLevel = qBound(0, value, 3);
+        saveToFile();
+        loadFromFile();
         refreshUiFromCurrent();
-        saveToFile();
-        send(QString("LED@%1").arg(ledText(m_ledLevel)));
+
+        // (원하면) 송신 유지
+        sendCCTV(QString("LED@%1").arg(ledText(m_ledLevel)));
         return;
     }
 
+    // ─── TIME ───
     if (mode == ChangeSetting::Mode::TIME) {
-        value = (value / 30) * 30;   // 30분 스냅
-        m_timeMin = value;
+        if (value == -1) {
+            // NOW: 현재 시각으로 즉시 반영 + 저장 + 발사 + 재예약
+            const QTime now = QTime::currentTime();
+            m_timeMin = now.hour()*60 + now.minute();
 
-        // UI 즉시 반영
-        const QString hhmm = QString("%1:%2")
-                               .arg((m_timeMin/60)%24, 2, 10, QChar('0'))
-                               .arg(m_timeMin%60,      2, 10, QChar('0'));
-        if (ui->pLcdtime) ui->pLcdtime->display(hhmm);
-        saveToFile();
-        send(QString("TIME@%1").arg(hhmm));
+            if (ui->pLcdtime)
+                ui->pLcdtime->display(now.toString("HH:mm"));
 
-        // 새 시간으로 알람 재예약
-        scheduleNextFire();
-        return;
+            // 파일에도 반영(여기서 저장)
+            {
+                const QString p = settingsPath();
+                QSettings s(p, QSettings::IniFormat);
+                s.setValue("SYS/time", now.toString("HH:mm"));
+                s.sync();
+            }
+
+            emit sendToServer("[TURTLE01]turtle@go");
+            qDebug() << "[Tab2_set] NOW fired [TURTLE01]turtle@go";
+
+            scheduleNextFire();
+            return;
+        } else {
+            // 다이얼 OK: ChangeSetting이 setting.txt에 저장 완료 → 즉시 파일 재로드해서 LCD 갱신 + 재예약
+            loadFromFile();         // ← 파일에서 HH:MM 다시 읽음
+            refreshUiFromCurrent(); // ← LCD 즉시 반영
+            scheduleNextFire();     // ← 다음 발사 재예약
+            return;
+        }
     }
 
-    // 숫자 항목들
+    // ─── 숫자 항목들(온도/습도/조도/공기/토양습도/EC/pH) ───
+    // 버튼으로 바꾼 값은 무조건 파일에 저장하고, "파일에서 다시 읽어" LCD를 파일값 그대로 보여주도록 고정
     const Topic t = topicForMode(mode);
     switch (mode) {
     case ChangeSetting::Mode::Temp:     m_airTemp   = value; break;
@@ -281,9 +288,13 @@ void Tab2_set::onSettingDecided(ChangeSetting::Mode mode, int value)
     default: break;
     }
 
-    refreshUiFromCurrent();
+    // 1) 파일 저장 → 2) 파일 재로드 → 3) LCD 갱신 (항상 파일 기준으로 표기)
     saveToFile();
-    send(QString("%1@%2@%3").arg(t.domain).arg(t.key).arg(value));
+    loadFromFile();
+    refreshUiFromCurrent();
+
+    // (원하면) 송신 유지
+    sendCCTV(QString("%1@%2@%3").arg(t.domain).arg(t.key).arg(value));
 }
 
 // ===== 모드→토픽 매핑 =====
@@ -303,59 +314,6 @@ Tab2_set::Topic Tab2_set::topicForMode(ChangeSetting::Mode m) const
     }
 }
 
-// ===== 서버 수신 파싱 =====
-bool Tab2_set::parseCCTV01(const QString& msg)
-{
-    // 기대 포맷: "[CCTV01]22.5@48.1@321@1@35@2@7@2"
-    // (temp@humi@illu@air@soil@ec@ph@led)
-    if (!msg.startsWith("[CCTV01]", Qt::CaseInsensitive))
-        return false;
-
-    const QString payload = msg.mid(msg.indexOf(']') + 1).trimmed();
-    const QStringList toks = payload.split('@', Qt::KeepEmptyParts);
-    if (toks.size() < 8) return false;
-
-    bool ok = true;
-    const int airTemp  = qRound(toks[0].toDouble(&ok)); if (!ok) return false;
-    const int airHumi  = qRound(toks[1].toDouble(&ok)); if (!ok) return false;
-    const int illu     = qRound(toks[2].toDouble(&ok)); if (!ok) return false;
-    const int air      = qRound(toks[3].toDouble(&ok)); if (!ok) return false;
-    const int soilHumi = qRound(toks[4].toDouble(&ok)); if (!ok) return false;
-    const int ec       = qRound(toks[5].toDouble(&ok)); if (!ok) return false;
-    const int ph       = qRound(toks[6].toDouble(&ok)); if (!ok) return false;
-    int led            = toks[7].toInt(&ok);            if (!ok) return false;
-
-    // 보관값 갱신(수신값)
-    m_airTemp   = airTemp;
-    m_airHumi   = airHumi;
-    m_illu      = illu;
-    m_air       = air;
-    m_soilHumi  = soilHumi;
-    m_ec        = ec;
-    m_ph        = ph;
-    m_ledLevel  = qBound(0, led, 3);
-
-    // UI 즉시 갱신
-    refreshUiFromCurrent();
-
-    qDebug() << "[Tab2_set] 기본값 업데이트(서버 수신)"
-             << m_airTemp << m_airHumi << m_illu << m_air
-             << m_soilHumi << m_ec << m_ph << m_ledLevel;
-
-    // 수신으로 파일도 갱신하려면 아래 한 줄 활성화
-    // saveToFile();
-
-    return true;
-}
-
-void Tab2_set::onSocketMessage(const QString& msg)
-{
-    const QStringList lines = msg.split(QRegularExpression("[\\r\\n]+"),
-                                        Qt::SkipEmptyParts);
-    for (const QString& line : lines)
-        parseCCTV01(line.trimmed());
-}
-
 // ===== 싱글샷: 다음 트리거 예약 & 발사 =====
 void Tab2_set::scheduleNextFire()
 {
@@ -372,8 +330,8 @@ void Tab2_set::scheduleNextFire()
 
 void Tab2_set::onScheduledFire()
 {
-    emit sendToServer("[TURTLE]go");
-    qDebug() << "[Tab2_set] fired [TURTLE]go";
+    emit sendToServer("[TURTLE01]turtle@go");
+    qDebug() << "[Tab2_set] fired [TURTLE01]turtle@go";
 
     // 다음 날 같은 시각으로 다시 예약
     scheduleNextFire();
