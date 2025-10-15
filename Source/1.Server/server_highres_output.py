@@ -85,7 +85,7 @@ nav2_motion_lock = threading.Lock()
 nav2_motion_thread: Optional[threading.Thread] = None
 nav2_active_robot: Optional[str] = None
 alignment_threads: dict[str, threading.Thread] = {}
-DEFAULT_FARM_DB_URL = "mysql+pymysql://user01:user1234@127.0.0.1:3306/smart_farm"
+DEFAULT_FARM_DB_URL = "mysql+pymysql://user01:user1234@10.10.16.29:3306/smart_farm"
 farm_db_url = os.getenv("FARM_DB_URL") or DEFAULT_FARM_DB_URL
 if FarmDataLogger:
     if "your_password" in farm_db_url:
@@ -1173,7 +1173,8 @@ def handle_user_client(conn, addr, client_id, prefetched_data=b""):
             if message.startswith("[") and "]" in message:
                 bracket_end = message.find("]")
                 target_label = message[1:bracket_end].strip()
-                payload = message[bracket_end + 1 :].lstrip()
+                #payload = message[bracket_end + 1 :].lstrip()
+                payload = message
                 target_key = target_label.upper()
                 if target_key.startswith("CCTV"):
                     with control_lock:
