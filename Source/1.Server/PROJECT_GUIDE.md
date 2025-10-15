@@ -24,7 +24,7 @@
    ```bash
    python3 -m venv .venv
    source .venv/bin/activate
-   pip install -r requirements.txt  # 필요 시 구성
+   pip install -r requirements.txt
    ```
 3. **MariaDB 준비** (선택)
    ```bash
@@ -35,7 +35,7 @@
    > CREATE USER 'user01'@'%' IDENTIFIED BY 'user1234';
    > GRANT ALL PRIVILEGES ON smart_farm.* TO 'user01'@'%';
    ```
-   - 서버 기본 연결 문자열은 `mysql+pymysql://user01:user1234@127.0.0.1:3306/smart_farm`입니다. 다른 계정을 사용하려면 `FARM_DB_URL` 환경 변수를 덮어쓰세요.
+   - 서버 기본 연결 문자열은 `mysql+pymysql://user01:user1234@10.10.16.29:3306/smart_farm`입니다. 다른 계정을 사용하려면 `FARM_DB_URL` 환경 변수를 덮어쓰세요.
 
 ## 3. 시뮬레이션 및 Nav2 구성
 시뮬레이터 없이 실제 TurtleBot과 연동할 수도 있으나, 개발/테스트 단계에서는 Gazebo + Nav2 환경을 사용하는 것이 안전합니다.

@@ -1025,15 +1025,15 @@ def handle_client(conn, addr, client_id, prefetched_data=b""):
                     )
 
             # FPS 계산
-            fps_frame_count += 1
-            if time.time() - fps_start_time >= 1.0:
-                display_fps = fps_frame_count / (time.time() - fps_start_time)
-                fps_frame_count = 0
-                fps_start_time = time.time()
+            # fps_frame_count += 1
+            # if time.time() - fps_start_time >= 1.0:
+            #     display_fps = fps_frame_count / (time.time() - fps_start_time)
+            #     fps_frame_count = 0
+            #     fps_start_time = time.time()
 
-            # FPS 표시 (글꼴 크기 포함)
-            fps_font_scale = 0.7 * (w_orig / font_base_width)
-            cv2.putText(rendered_frame, f"FPS: {display_fps:.2f}", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, fps_font_scale, (0, 0, 255), 2)
+            # # FPS 표시 (글꼴 크기 포함)
+            # fps_font_scale = 0.7 * (w_orig / font_base_width)
+            # cv2.putText(rendered_frame, f"FPS: {display_fps:.2f}", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, fps_font_scale, (0, 0, 255), 2)
             
             # 처리된 프레임을 공유 변수에 저장
             with lock:
