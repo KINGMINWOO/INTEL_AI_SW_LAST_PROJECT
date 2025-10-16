@@ -5,6 +5,7 @@ import socket
 import cv2
 # import pickle # pickle은 더 이상 사용하지 않음
 import struct
+import subprocess
 import threading
 import time
 import hmac
@@ -38,16 +39,24 @@ YAW_ALIGNMENT_THRESHOLD = 0.01
 
 COMMAND_SPECS: dict[str, dict[str, Optional[float] | tuple[float, float] | str]] = {
     "ripe@go": {"mode": "manual_offset", "target": (2.0, 0.0), "yaw": None},
-    "ripe@done": {"mode": "nav2", "target": (1.5, 0.5), "yaw": math.pi},
-    "rotten@go": {"mode": "nav2", "target": (1.5, -0.5), "yaw": math.pi * 0.5},
-    "rotten@done": {"mode": "nav2", "target": (-1.5, 0.5), "yaw": math.pi * 1.5},
-    "dump@done": {"mode": "nav2", "target": (-1.5, -0.7), "yaw": 0.0},
+    "ripe@1": {"mode": "nav2", "target": (0.3, 0.0), "yaw": 0.0},
+    "ripe@2": {"mode": "nav2", "target": (0.6, 0.0), "yaw": 0.0},
+    "ripe@3": {"mode": "nav2", "target": (0.9, 0.0), "yaw": 0.0},
+    "ripe@4": {"mode": "nav2", "target": (1.2, 0.0), "yaw": 0.0},
+    "ripe@5": {"mode": "nav2", "target": (1.5, 0.0), "yaw": 0.0},
+    "ripe@6": {"mode": "nav2", "target": (1.8, 0.0), "yaw": 0.0},
+    "ripe@7": {"mode": "nav2", "target": (2.0, 0.0), "yaw": math.pi},
+    "ripe@done": {"mode": "nav2", "target": (1.817, 0.786), "yaw": 3.117},
+    "rotten@go": {"mode": "manual_offset", "target": (1.5, -0.5), "yaw": None},
+    "rotten@done": {"mode": "nav2", "target": (0.019, 0.958), "yaw": -0.263},
+    "dump@done": {"mode": "nav2", "target": (0.0, 0.0), "yaw": 0.0},
 }
 
 NAV2_QUEUE_TEMPLATES: dict[str, list[str]] = {
     "turtle@go": [
         "ripe@go",
         "ripe@done",
+        "dump@done",
         "dump@done",
         "rotten@go",
         "rotten@done",
@@ -68,6 +77,13 @@ CREDENTIAL_FILE = BASE_DIR / "idlist.txt"
 AUTH_PROMPT = b"AUTH_REQUEST\n"
 AUTH_OK = b"AUTH_OK\n"
 AUTH_FAIL = b"AUTH_FAIL\n"
+LINE_TRACER_SCRIPT = (BASE_DIR.parent / "3.Robot" / "1.ROS" / "line_tracer_remote.py").resolve()
+LINE_TRACER_STOP_TIMEOUT = 2.0
+
+DUMP_STAGE_TARGET = (-0.166, -0.227)
+DUMP_STAGE_YAW = -2.359
+DUMP_FINAL_QUEUE_LABEL = "__dump@done_finalize__"
+LINE_TRACER_LABELS = {"ripe@go", "rotten@go"}
 
 print(f"YOLOv8 모델을 {device} 장치로 로드했습니다.") # 로드된 장치 출력
 
@@ -241,18 +257,68 @@ def analyze_cctv_before_sequence(user_suffix: str) -> None:
     )
 
 
+line_tracer_lock = threading.Lock()
+line_tracer_processes: dict[str, subprocess.Popen] = {}
+
+
+def handle_line_tracer_exit(robot_id: str, return_code: Optional[int]) -> None:
+    """라인 트레이서 프로세스 종료 후 로봇 주행 상태를 정리."""
+    upper_id = robot_id.upper()
+    should_stop = False
+    manual_label: Optional[str] = None
+    with control_lock:
+        state = robot_states.get(upper_id)
+        if state is not None:
+            manual_active = bool(state.get("nav2_manual_active"))
+            nav_label = state.get("nav2_label")
+            paused_label = state.get("nav2_paused_label")
+            stop_sent = bool(state.get("stop_sent"))
+            if nav_label in LINE_TRACER_LABELS:
+                manual_label = nav_label
+            elif paused_label in LINE_TRACER_LABELS:
+                manual_label = paused_label
+                state["nav2_label"] = paused_label
+                state["nav2_paused_label"] = None
+                state["nav2_paused_goal"] = None
+                state["nav2_paused_yaw"] = None
+            if manual_active and nav_label in LINE_TRACER_LABELS and not stop_sent:
+                state["stop_sent"] = True
+                should_stop = True
+    if should_stop:
+        print(f"{upper_id} 라인 트레이서 종료 감지(exit={return_code}) → STOP 명령 전송.")
+        send_stop_to_robot(upper_id)
+    else:
+        print(f"{upper_id} 라인 트레이서 종료 감지(exit={return_code}).")
+
+    progressed = False
+    if manual_label in LINE_TRACER_LABELS:
+        with control_lock:
+            state = robot_states.get(upper_id)
+            if state is not None:
+                state["nav2_manual_active"] = True
+        progressed = complete_manual_move(upper_id)
+    if not progressed:
+        schedule_next_nav2(upper_id)
+def handle_line_tracer_shutdown_signal(robot_id: str) -> None:
+    """라인 트레이서 내부 종료 요청(예: 센서 [0, 0]) 감지 시 즉시 정지."""
+    upper_id = robot_id.upper()
 def normalize_angle(angle: float) -> float:
     """-pi~pi 범위의 각도로 정규화."""
     wrapped = (angle + math.pi) % (2 * math.pi) - math.pi
     return wrapped
 
 
-def cancel_nav2_navigation(robot_id: Optional[str] = None, wait: bool = True) -> bool:
+def cancel_nav2_navigation(
+    robot_id: Optional[str] = None,
+    wait: bool = True,
+    stop_line_tracer_on_cancel: bool = True,
+) -> bool:
     """현재 Nav2 목표가 진행 중이라면 취소."""
     global nav2_motion_thread, nav2_active_robot
     cancelled = False
 
     target_robot = robot_id.upper() if robot_id else nav2_active_robot
+    should_stop_line_tracer = False
 
     if nav2_bridge is not None:
         try:
@@ -283,6 +349,10 @@ def cancel_nav2_navigation(robot_id: Optional[str] = None, wait: bool = True) ->
                     state["nav2_paused_goal"] = state.get("nav2_goal")
                     state["nav2_paused_yaw"] = state.get("nav2_goal_yaw", 0.0)
                 state["nav2_active"] = False
+                active_label = state.get("nav2_label")
+                paused_label = state.get("nav2_paused_label")
+                if (active_label in LINE_TRACER_LABELS) or (paused_label in LINE_TRACER_LABELS):
+                    should_stop_line_tracer = True
                 if not state.get("nav2_paused_label"):
                     state["nav2_label"] = None
                     state["nav2_goal"] = None
@@ -290,7 +360,96 @@ def cancel_nav2_navigation(robot_id: Optional[str] = None, wait: bool = True) ->
         if nav2_active_robot == target_robot:
             nav2_active_robot = None
 
+    if should_stop_line_tracer and target_robot and stop_line_tracer_on_cancel:
+        stop_line_tracer(target_robot)
+
     return cancelled
+
+
+def stop_line_tracer(robot_id: str, wait_timeout: float = LINE_TRACER_STOP_TIMEOUT) -> None:
+    """라인 트레이서 프로세스를 종료."""
+    upper_id = robot_id.upper()
+    process: Optional[subprocess.Popen]
+    with line_tracer_lock:
+        process = line_tracer_processes.pop(upper_id, None)
+    if not process:
+        return
+    if process.poll() is not None:
+        return
+    try:
+        process.terminate()
+        try:
+            process.wait(timeout=wait_timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=wait_timeout)
+        print(f"{upper_id} 라인 트레이서를 종료했습니다.")
+    except Exception as exc:  # noqa: BLE001
+        print(f"{upper_id} 라인 트레이서 종료 실패: {exc}")
+    finally:
+        try:
+            if getattr(process, "stdout", None):
+                process.stdout.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def start_line_tracer(robot_id: str) -> bool:
+    """라인 트레이서 프로세스를 실행."""
+    upper_id = robot_id.upper()
+    if not LINE_TRACER_SCRIPT.exists():
+        print(f"{upper_id} 라인 트레이서 스크립트를 찾을 수 없습니다: {LINE_TRACER_SCRIPT}")
+        return False
+    # 이전 인스턴스가 남아있다면 종료 후 재시작
+    stop_line_tracer(upper_id)
+    try:
+        process = subprocess.Popen(
+            ["python3", str(LINE_TRACER_SCRIPT)],
+            cwd=str(LINE_TRACER_SCRIPT.parent),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"{upper_id} 라인 트레이서 실행 실패: {exc}")
+        return False
+    with line_tracer_lock:
+        line_tracer_processes[upper_id] = process
+    def _read_output() -> None:
+        if process.stdout is None:
+            return
+        try:
+            for raw_line in process.stdout:
+                line = raw_line.rstrip("\n")
+                if not line:
+                    continue
+                print(f"[{upper_id} LINE] {line}")
+                if "라인 트레이서 종료 신호 수신" in line:
+                    print(f"{upper_id} 라인 트레이서 종료 신호 감지.")
+        except Exception as exc:  # noqa: BLE001
+            print(f"{upper_id} 라인 트레이서 출력 수집 중 오류: {exc}")
+        finally:
+            try:
+                process.stdout.close()
+            except Exception:  # noqa: BLE001
+                pass
+    def _monitor() -> None:
+        return_code: Optional[int] = None
+        try:
+            return_code = process.wait()
+        except Exception as exc:  # noqa: BLE001
+            print(f"{upper_id} 라인 트레이서 모니터링 오류: {exc}")
+        finally:
+            with line_tracer_lock:
+                existing = line_tracer_processes.get(upper_id)
+                if existing is process:
+                    line_tracer_processes.pop(upper_id, None)
+            handle_line_tracer_exit(upper_id, return_code)
+    threading.Thread(target=_read_output, daemon=True).start()
+    threading.Thread(target=_monitor, daemon=True).start()
+    print(f"{upper_id} 라인 트레이서를 시작했습니다. (PID: {process.pid})")
+    return True
 
 
 def align_robot_heading(robot_id: str, target_yaw: float = 0.0, threshold: float = YAW_ALIGNMENT_THRESHOLD) -> None:
@@ -494,11 +653,13 @@ def start_nav2_navigation(
     return True, "NAV2_STARTED"
 
 
-def send_stop_to_robot(target_id: str) -> None:
+def send_stop_to_robot(target_id: str, *, kill_line_tracer: bool = True) -> None:
     upper_id = target_id.upper()
     with control_lock:
         target_conn = robot_clients.get(upper_id)
     if not target_conn:
+        if kill_line_tracer:
+            stop_line_tracer(upper_id)
         return
     try:
         target_conn.sendall(b"STOP\n")
@@ -511,6 +672,9 @@ def send_stop_to_robot(target_id: str) -> None:
                 state["align_pending"] = False
     except OSError as exc:  # noqa: BLE001
         print(f"{upper_id} STOP 명령 전송 실패: {exc}")
+    finally:
+        if kill_line_tracer:
+            stop_line_tracer(upper_id)
 
 
 def send_turn_command(target_id: str, linear: float, angular: float) -> bool:
@@ -613,12 +777,20 @@ def should_trigger_auto_stop(robot_id: str, category: str, x_center_norm: float)
             buffer.pop(0)
         if len(buffer) >= DETECTION_COUNT_THRESHOLD:
             buffer.clear()
-            state["nav2_paused_label"] = expected_label
-            state["nav2_paused_goal"] = state.get("nav2_goal")
-            state["nav2_paused_yaw"] = state.get("nav2_goal_yaw", 0.0)
-            state["nav2_label"] = None
+            # git 충돌 대비 bbang
+            # state["nav2_paused_label"] = expected_label
+            # state["nav2_paused_goal"] = state.get("nav2_goal")
+            # state["nav2_paused_yaw"] = state.get("nav2_goal_yaw", 0.0)
+            # state["nav2_label"] = None
+            # state["nav2_active"] = False
+            # state["nav2_manual_active"] = False
+            # git 충돌 대비 bbang 끝
+            state["nav2_paused_label"] = None
+            state["nav2_paused_goal"] = None
+            state["nav2_paused_yaw"] = None
+            state["nav2_label"] = expected_label
             state["nav2_active"] = False
-            state["nav2_manual_active"] = False
+            state["nav2_manual_active"] = True
             return True
     return False
 
@@ -711,6 +883,8 @@ def complete_manual_move(robot_id: str) -> bool:
             nav2_active_robot = None
         print(f"{upper_id} 수동 이동 완료: 큐 다음 단계로 진행")
         schedule_next_nav2(upper_id)
+    if label in LINE_TRACER_LABELS:
+        stop_line_tracer(upper_id)
     return True
 
 
@@ -922,8 +1096,10 @@ def handle_client(conn, addr, client_id, prefetched_data=b""):
                     complete_manual_move(client_id.upper())
                     continue
                 if lowered == "robot@done" and is_robot:
-                    if not resume_nav2_for_robot(client_id.upper()):
-                        complete_manual_move(client_id.upper())
+                    upper_id = client_id.upper()
+                    if resume_nav2_for_robot(upper_id):
+                        continue
+                    complete_manual_move(upper_id)
                     continue
                 else:
                     print(f"{client_id} 제어 메시지 수신: {control_line}")
@@ -1049,6 +1225,7 @@ def handle_client(conn, addr, client_id, prefetched_data=b""):
         client_frames.pop(client_id, None)
     with control_lock:
         if is_robot:
+            stop_line_tracer(client_id)
             robot_clients.pop(client_id.upper(), None)
             robot_states.pop(client_id.upper(), None)
         elif client_id.upper().startswith("CCTV"):
@@ -1072,6 +1249,24 @@ def dispatch_move_command(
 
     if use_nav2 and nav2_bridge is not None and Nav2Result is not None:
         goal_point = target if target is not None else origin
+        goal_yaw = float(yaw) if yaw is not None else 0.0
+        if command == "dump@done":
+            success, status = start_nav2_navigation(
+                upper_id,
+                DUMP_STAGE_TARGET,
+                "dump@stage",
+                DUMP_STAGE_YAW,
+            )
+            if success:
+                with control_lock:
+                    state = robot_states.get(upper_id)
+                    if state is not None:
+                        queue = state.setdefault("nav2_queue", [])
+                        queue.insert(0, (DUMP_FINAL_QUEUE_LABEL, goal_point, goal_yaw, "nav2"))
+            return success, status
+        if command == DUMP_FINAL_QUEUE_LABEL:
+            success, status = start_nav2_navigation(upper_id, goal_point, "dump@done", goal_yaw)
+            return success, status
         success, status = start_nav2_navigation(upper_id, goal_point, command, yaw)
         return success, status
 
@@ -1131,6 +1326,22 @@ def dispatch_move_command(
     if target_conn is None:
         return False, "TARGET_NOT_CONNECTED"
 
+    should_send_move = True
+
+    if command in LINE_TRACER_LABELS and mode != "nav2":
+        if not start_line_tracer(upper_id):
+            with control_lock:
+                state = robot_states.get(upper_id)
+                if state is not None:
+                    state["nav2_active"] = False
+                    state["nav2_manual_active"] = False
+            return False, "SCRIPT_FAILED"
+        should_send_move = False
+
+    if not should_send_move:
+        print(f"{target_id} 라인 트레이서에 제어를 위임합니다. (MOVE 명령 생략)")
+        return True, "LINE_TRACER_ACTIVE"
+
     message = f"MOVE:0.00,0.00->{rel_target[0]:.2f},{rel_target[1]:.2f}\n"
     try:
         target_conn.sendall(message.encode("utf-8"))
@@ -1145,6 +1356,8 @@ def dispatch_move_command(
             if state is not None:
                 state["nav2_active"] = False
                 state["nav2_manual_active"] = False
+        if command in LINE_TRACER_LABELS:
+            stop_line_tracer(upper_id)
         return False, "SEND_FAILED"
 
 

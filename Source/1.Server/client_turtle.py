@@ -28,8 +28,8 @@ CLIENT_PASSWORD = "TURTLE1234"
 
 #SERVER_ADDR: Tuple[str, int] = ("10.10.16.29", 9999)
 SERVER_ADDR: Tuple[str, int] = ("127.0.0.1", 9999)
-FRAME_SIZE = (640, 480)  # (width, height)
-TARGET_FPS = 10          # 0 => no sleep, otherwise throttle
+FRAME_SIZE = (1280,720)  # (width, height)
+TARGET_FPS = 40        # 0 => no sleep, otherwise throttle
 JPEG_QUALITY = 85
 ODOM_TOPIC = "/odom"
 POSE_SEND_INTERVAL = 0.2  # seconds
