@@ -39,13 +39,6 @@ YAW_ALIGNMENT_THRESHOLD = 0.01
 
 COMMAND_SPECS: dict[str, dict[str, Optional[float] | tuple[float, float] | str]] = {
     "ripe@go": {"mode": "manual_offset", "target": (2.0, 0.0), "yaw": None},
-    "ripe@1": {"mode": "nav2", "target": (0.3, 0.0), "yaw": 0.0},
-    "ripe@2": {"mode": "nav2", "target": (0.6, 0.0), "yaw": 0.0},
-    "ripe@3": {"mode": "nav2", "target": (0.9, 0.0), "yaw": 0.0},
-    "ripe@4": {"mode": "nav2", "target": (1.2, 0.0), "yaw": 0.0},
-    "ripe@5": {"mode": "nav2", "target": (1.5, 0.0), "yaw": 0.0},
-    "ripe@6": {"mode": "nav2", "target": (1.8, 0.0), "yaw": 0.0},
-    "ripe@7": {"mode": "nav2", "target": (2.0, 0.0), "yaw": math.pi},
     "ripe@done": {"mode": "nav2", "target": (1.817, 0.786), "yaw": 3.117},
     "rotten@go": {"mode": "manual_offset", "target": (1.5, -0.5), "yaw": None},
     "rotten@done": {"mode": "nav2", "target": (0.019, 0.958), "yaw": -0.263},
@@ -290,14 +283,24 @@ def handle_line_tracer_exit(robot_id: str, return_code: Optional[int]) -> None:
     else:
         print(f"{upper_id} 라인 트레이서 종료 감지(exit={return_code}).")
 
-    progressed = False
     if manual_label in LINE_TRACER_LABELS:
+        print(f"{upper_id} 라인 트레이서 이동 완료: 큐 다음 단계로 진행")
         with control_lock:
             state = robot_states.get(upper_id)
             if state is not None:
-                state["nav2_manual_active"] = True
-        progressed = complete_manual_move(upper_id)
-    if not progressed:
+                state["nav2_manual_active"] = False
+                state["nav2_active"] = False
+                state["nav2_label"] = None
+                state["nav2_goal"] = None
+                state["nav2_goal_yaw"] = 0.0
+                state["stop_sent"] = False
+                history = state.setdefault("detection_history", {"ripe": [], "rotten": []})
+                for buf in history.values():
+                    buf.clear()
+
+        stop_line_tracer(upper_id)
+        schedule_next_nav2(upper_id)
+    else:
         schedule_next_nav2(upper_id)
 def handle_line_tracer_shutdown_signal(robot_id: str) -> None:
     """라인 트레이서 내부 종료 요청(예: 센서 [0, 0]) 감지 시 즉시 정지."""
@@ -426,7 +429,9 @@ def start_line_tracer(robot_id: str) -> bool:
                     continue
                 print(f"[{upper_id} LINE] {line}")
                 if "라인 트레이서 종료 신호 수신" in line:
-                    print(f"{upper_id} 라인 트레이서 종료 신호 감지.")
+                    print(f"{upper_id} 라인 트레이서 종료 신호 감지. 프로세스를 강제 종료합니다.")
+                    stop_line_tracer(upper_id)
+                    break
         except Exception as exc:  # noqa: BLE001
             print(f"{upper_id} 라인 트레이서 출력 수집 중 오류: {exc}")
         finally:
