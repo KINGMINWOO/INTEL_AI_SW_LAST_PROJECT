@@ -1,4 +1,4 @@
-"""TurtleBot 전용 스트리밍 클라이언트 (ROS2 오도메트리 전송 포함)."""
+"TurtleBot 전용 스트리밍 클라이언트 (ROS2 오도메트리 및 라인 센서 통합)."
 
 import math
 import socket
@@ -15,11 +15,19 @@ try:
     from geometry_msgs.msg import Twist
     from nav_msgs.msg import Odometry
     from rclpy.node import Node
+    from std_msgs.msg import Int32MultiArray
 except ImportError:  # noqa: F401
     rclpy = None  # type: ignore
     Odometry = None  # type: ignore
     Node = None  # type: ignore
     Twist = None  # type: ignore
+    Int32MultiArray = None # type: ignore
+
+try:
+    import RPi.GPIO as GPIO
+except (ImportError, RuntimeError):
+    GPIO = None
+
 
 AUTH_PROMPT = "AUTH_REQUEST"
 AUTH_OK = "AUTH_OK"
@@ -69,7 +77,7 @@ def normalize_angle(angle: float) -> float:
 
 
 class OdometryBridge:
-    """ROS2 오도메트리를 구독하고 cmd_vel을 발행하는 간단한 브리지."""
+    """ROS2 오도메트리 구독, 라인 센서 발행, cmd_vel 발행을 통합한 브리지."""
 
     def __init__(self, odom_topic: str = ODOM_TOPIC, cmd_vel_topic: str = "/cmd_vel") -> None:
         self.odom_topic = odom_topic
@@ -80,15 +88,32 @@ class OdometryBridge:
         self._origin: Optional[Tuple[float, float]] = None
         self._thread: Optional[threading.Thread] = None
         self._running = False
-        self._node: Optional["OdometryBridge._OdomNode"] = None
+        self._node: Optional["OdometryBridge._BridgeNode"] = None
         self._owns_context = False
 
-    class _OdomNode(Node):
+    class _BridgeNode(Node):
         def __init__(self, parent: "OdometryBridge", odom_topic: str, cmd_vel_topic: str) -> None:
-            super().__init__("turtle_client_odom_bridge")
+            super().__init__("turtle_client_bridge")
             self._parent = parent
             self._cmd_pub = self.create_publisher(Twist, cmd_vel_topic, 10)
             self.create_subscription(Odometry, odom_topic, self._odom_callback, 10)
+            self._gpio_initialized = False
+
+            if GPIO and Int32MultiArray:
+                try:
+                    self._line_pub = self.create_publisher(Int32MultiArray, '/line_sensor', 10)
+                    GPIO.setmode(GPIO.BCM)
+                    self._left_pin = 17
+                    self._right_pin = 27
+                    GPIO.setup(self._left_pin, GPIO.IN)
+                    GPIO.setup(self._right_pin, GPIO.IN)
+                    self.create_timer(0.1, self._publish_line_sensor)
+                    self.get_logger().info("📡 Line Sensor Publisher integration enabled.")
+                    self._gpio_initialized = True
+                except Exception as e:
+                    self.get_logger().error(f"Failed to initialize GPIO for line sensor: {e}")
+            else:
+                self.get_logger().warn("RPi.GPIO or ROS2 msgs not found, line sensor publisher is disabled.")
 
         def _odom_callback(self, msg: Odometry) -> None:
             pose = msg.pose.pose
@@ -98,15 +123,32 @@ class OdometryBridge:
                 quaternion_to_yaw(pose.orientation.w, pose.orientation.x, pose.orientation.y, pose.orientation.z),
             )
 
+        def _publish_line_sensor(self) -> None:
+            if not self._gpio_initialized:
+                return
+            try:
+                L = GPIO.input(self._left_pin)
+                R = GPIO.input(self._right_pin)
+                msg = Int32MultiArray()
+                msg.data = [L, R]
+                self._line_pub.publish(msg)
+            except Exception as e:
+                self.get_logger().error(f"Error reading/publishing line sensor data: {e}")
+
         def publish_velocity(self, linear_x: float, angular_z: float) -> None:
             twist = Twist()
             twist.linear.x = linear_x
             twist.angular.z = angular_z
             self._cmd_pub.publish(twist)
 
+        def cleanup_gpio(self) -> None:
+            if self._gpio_initialized:
+                GPIO.cleanup()
+                self.get_logger().info("GPIO cleaned up.")
+
     def start(self) -> bool:
         if rclpy is None or Node is None or Odometry is None or Twist is None:
-            print("rclpy 패키지를 찾을 수 없어 오도메트리 구독을 건너뜁니다.")
+            print("rclpy 패키지를 찾을 수 없어 ROS2 기능을 건너뜁니다.")
             return False
         if self._running:
             return True
@@ -116,14 +158,14 @@ class OdometryBridge:
                 self._owns_context = True
             else:
                 self._owns_context = False
-            self._node = self._OdomNode(self, self.odom_topic, self.cmd_vel_topic)
+            self._node = self._BridgeNode(self, self.odom_topic, self.cmd_vel_topic)
             self._running = True
             self._thread = threading.Thread(target=self._spin, daemon=True)
             self._thread.start()
-            print(f"ROS2 오도메트리 구독을 시작합니다: {self.odom_topic}")
+            print(f"ROS2 브리지 시작: 오도메트리({self.odom_topic}), 라인센서(/line_sensor)")
             return True
         except Exception as exc:  # noqa: BLE001
-            print(f"오도메트리 브리지 초기화 실패: {exc}")
+            print(f"ROS2 브리지 초기화 실패: {exc}")
             self.stop()
             return False
 
@@ -134,6 +176,8 @@ class OdometryBridge:
         finally:
             if self._node is not None:
                 try:
+                    if hasattr(self._node, "cleanup_gpio"):
+                        self._node.cleanup_gpio()
                     self._node.destroy_node()
                 except Exception:  # noqa: BLE001
                     pass
@@ -334,7 +378,8 @@ def configure_capture() -> Tuple[cv2.VideoCapture, float]:
         print(
             f"카메라 설정: {actual_w:.0f}x{actual_h:.0f} @ {sensor_fps:.1f}fps"
             f" (FOURCC {applied_fourcc})"
-            f" (요청 {requested_fps:.1f}fps, 전송은 {requested_fps:.1f}fps로 제한)")
+            f" (요청 {requested_fps:.1f}fps, 전송은 {requested_fps:.1f}fps로 제한)"
+        )
     else:
         print(f"카메라 설정: {actual_w:.0f}x{actual_h:.0f} @ {sensor_fps:.1f}fps (FOURCC {applied_fourcc})")
 
@@ -370,7 +415,6 @@ def authenticate(sock: socket.socket) -> bool:
 
     print("서버 인증에 실패했습니다. ID/Password를 확인하세요.")
     return False
-
 
 def handle_server_message(line: str, motion: Optional[MotionController]) -> None:
     if not line:
@@ -414,7 +458,6 @@ def handle_server_message(line: str, motion: Optional[MotionController]) -> None
     else:
         print(f"서버 메시지: {line}")
 
-
 def receive_async(sock: socket.socket, motion: Optional[MotionController]) -> None:
     buffer = bytearray()
     while True:
@@ -434,7 +477,6 @@ def receive_async(sock: socket.socket, motion: Optional[MotionController]) -> No
             print("메시지 수신 스레드 오류.")
             break
 
-
 def send_control_message(sock: socket.socket, message: str) -> None:
     text = message.strip()
     if not text:
@@ -447,7 +489,6 @@ def send_control_message(sock: socket.socket, message: str) -> None:
     except OSError as exc:
         print(f"제어 메시지 전송 실패: {exc}")
 
-
 def send_pose_message(sock: socket.socket, pose: Tuple[float, float, float]) -> None:
     header = struct.pack(">L", 0)
     x, y, yaw = pose
@@ -456,7 +497,6 @@ def send_pose_message(sock: socket.socket, pose: Tuple[float, float, float]) -> 
         sock.sendall(header + payload)
     except OSError as exc:
         print(f"POSE 메시지 전송 실패: {exc}")
-
 
 def command_prompt(stop_event: threading.Event, sock: socket.socket) -> None:
     print("명령 입력 스레드 시작. 'robot@done' 또는 기타 문자열을 입력하면 서버로 전달됩니다.")
@@ -468,7 +508,6 @@ def command_prompt(stop_event: threading.Event, sock: socket.socket) -> None:
         if not user_input:
             continue
         send_control_message(sock, user_input)
-
 
 def main() -> None:
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

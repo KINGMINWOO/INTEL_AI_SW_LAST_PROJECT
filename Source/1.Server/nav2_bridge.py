@@ -100,7 +100,7 @@ class Nav2Bridge(Node):
         def _goal_response_callback(future) -> None:
             goal_handle = future.result()
             if not goal_handle.accepted:
-                result_holder["value"] = Nav2Result(False, GoalStatus.STATUS_REJECTED, "GOAL_REJECTED")
+                result_holder["value"] = Nav2Result(False, GoalStatus.STATUS_UNKNOWN, "GOAL_REJECTED")
                 complete_event.set()
                 return
             with self._goal_lock:
@@ -160,7 +160,7 @@ class Nav2Bridge(Node):
         def _goal_response_callback(future) -> None:
             goal_handle = future.result()
             if not goal_handle.accepted:
-                result_holder["value"] = Nav2Result(False, GoalStatus.STATUS_REJECTED, "SPIN_REJECTED")
+                result_holder["value"] = Nav2Result(False, GoalStatus.STATUS_UNKNOWN, "SPIN_REJECTED")
                 complete_event.set()
                 return
             result_future = goal_handle.get_result_async()

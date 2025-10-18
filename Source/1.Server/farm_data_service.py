@@ -1,12 +1,12 @@
-"""Farm data ingestion service for CCTV and sensor clients.
+"""CCTV 및 센서 클라이언트가 전송하는 농가 데이터를 수집해 DB에 저장하는 서비스.
 
-Run with:
+실행 예:
     $ FARM_DB_URL='mysql+pymysql://user:pass@host:3306/farm' \
       python3 farm_data_service.py
 
-The service accepts JSON payloads (POST /api/farm-data) with a raw string such as
-"farm@10.2@75.3@25.8" and stores the parsed metrics in MariaDB. Metric names are
-loaded from ``farm_metrics.json`` (create or edit to change the order)."""
+이 서비스는 POST /api/farm-data 요청으로 `"farm@10.2@75.3@25.8"` 같은 문자열을 받아
+MariaDB에 저장합니다. 지표 이름은 `farm_metrics.json`에서 로드하거나, 파일이 없으면
+기본값을 사용합니다."""
 
 from __future__ import annotations
 
@@ -53,7 +53,7 @@ class ParsedSample:
 
 
 class FarmMetricParser:
-    """Parse delimited sensor strings into metric dictionaries."""
+    """구분자로 구성된 센서 문자열을 파싱해 지표 사전으로 변환."""
 
     def __init__(self, config_path: Path = CONFIG_FILE) -> None:
         self.config_path = config_path
@@ -132,7 +132,7 @@ else:  # pragma: no cover - fallback without SQLAlchemy
 
 
 class FarmDataRepository:
-    """Store samples into MariaDB; degrade gracefully if SQLAlchemy is unavailable."""
+    """MariaDB에 샘플을 저장하며, SQLAlchemy가 없다면 로그만 남기도록 동작."""
 
     def __init__(self, db_url: Optional[str]) -> None:
         self.db_url = db_url
@@ -175,7 +175,7 @@ class FarmDataRepository:
 
 
 class FarmDataService:
-    """HTTP service that ingests farm telemetry and stores it in MariaDB."""
+    """농가 텔레메트리를 수집해 MariaDB에 저장하는 HTTP 서비스."""
 
     def __init__(self, parser: FarmMetricParser, repository: FarmDataRepository) -> None:
         self.parser = parser
