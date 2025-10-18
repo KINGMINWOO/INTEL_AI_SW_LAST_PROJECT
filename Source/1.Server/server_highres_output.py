@@ -63,6 +63,8 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu' # CUDA 사용 가능 여
 #model = YOLO('/home/bbang/Workspace/intel_final/intel_final_project/runs/detect/yolov8x_tomato3/weights/best.pt').to(device) # 모델을 해당 장치로 로드
 #model = YOLO('/home/bbang/Workspace/intel_final/intel_final_project/runs/detect/yolov8x_tomato10/weights/best.pt').to(device) # 모델을 해당 장치로 로드
 model = YOLO('best.pt').to(device)
+#model = YOLO('/home/bbang/Workspace/intel_final/intel_final_project/runs/detect/yolov8x_final3/weights/best.pt').to(device)
+
 model_lock = threading.Lock()
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -95,6 +97,7 @@ nav2_motion_thread: Optional[threading.Thread] = None
 nav2_active_robot: Optional[str] = None
 alignment_threads: dict[str, threading.Thread] = {}
 DEFAULT_FARM_DB_URL = "mysql+pymysql://user01:user1234@10.10.16.29:3306/smart_farm"
+#DEFAULT_FARM_DB_URL = "mysql+pymysql://user01:user1234@192.168.0.4:3306/smart_farm"
 farm_db_url = os.getenv("FARM_DB_URL") or DEFAULT_FARM_DB_URL
 if FarmDataLogger:
     if "your_password" in farm_db_url:
@@ -187,69 +190,6 @@ def try_handle_sensor_payload(source_id: str, payload: str) -> bool:
     return False
 
 
-def count_tomatoes_in_frame(frame: np.ndarray, conf_threshold: float = 0.6) -> tuple[int, int]:
-    """단일 프레임에서 익은/썩은 토마토 수를 계산."""
-    h_orig, w_orig, _ = frame.shape
-    yolo_w = 640
-    yolo_h = int(yolo_w * (h_orig / w_orig))
-    resized = cv2.resize(frame, (yolo_w, yolo_h))
-    with model_lock:
-        results = model(resized, verbose=False)
-    ripe_count = 0
-    rotten_count = 0
-    for box in results[0].boxes:
-        conf = float(box.conf[0])
-        if conf < conf_threshold:
-            continue
-        cls = int(box.cls[0])
-        name = model.names[cls]
-        if name == "ripe":
-            ripe_count += 1
-        elif name == "rotten":
-            rotten_count += 1
-    return ripe_count, rotten_count
-
-
-def capture_cctv_snapshot(user_suffix: str) -> tuple[Optional[str], Optional[np.ndarray]]:
-    """USERxx와 매칭되는 CCTVxx 프레임을 우선적으로 반환."""
-    frame_copy: Optional[np.ndarray] = None
-    cctv_id: Optional[str] = None
-    with frames_lock:
-        if user_suffix:
-            matched_id = f"CCTV{user_suffix}"
-            frame = client_frames.get(matched_id)
-            if frame is not None:
-                cctv_id = matched_id
-                frame_copy = frame.copy()
-        if frame_copy is None:
-            for cid, frame in client_frames.items():
-                if cid.upper().startswith("CCTV") and frame is not None:
-                    cctv_id = cid
-                    frame_copy = frame.copy()
-                    break
-    return cctv_id, frame_copy
-
-
-def analyze_cctv_before_sequence(user_suffix: str) -> None:
-    """turtle@go 실행 전 CCTV 프레임을 분석해 DB에 스냅샷을 남긴다."""
-    cctv_id, frame = capture_cctv_snapshot(user_suffix)
-    if cctv_id is None or frame is None:
-        print("[토마토 스냅샷] 사용 가능한 CCTV 프레임이 없어 분석을 건너뜁니다.")
-        return
-
-    ripe, rotten = count_tomatoes_in_frame(frame)
-    total = ripe + rotten
-
-    status = "미초기화"
-    if farm_logger:
-        stored = farm_logger.log_tomato_snapshot(cctv_id, ripe, rotten)
-        status = "저장" if stored else "로컬로그"
-
-    print(
-        f"[토마토 스냅샷] CCTV={cctv_id} ripe={ripe} rotten={rotten} total={total} ({status})"
-    )
-
-
 line_tracer_lock = threading.Lock()
 line_tracer_processes: dict[str, subprocess.Popen] = {}
 
@@ -302,9 +242,8 @@ def handle_line_tracer_exit(robot_id: str, return_code: Optional[int]) -> None:
         schedule_next_nav2(upper_id)
     else:
         schedule_next_nav2(upper_id)
-def handle_line_tracer_shutdown_signal(robot_id: str) -> None:
-    """라인 트레이서 내부 종료 요청(예: 센서 [0, 0]) 감지 시 즉시 정지."""
-    upper_id = robot_id.upper()
+
+
 def normalize_angle(angle: float) -> float:
     """-pi~pi 범위의 각도로 정규화."""
     wrapped = (angle + math.pi) % (2 * math.pi) - math.pi
@@ -455,53 +394,6 @@ def start_line_tracer(robot_id: str) -> bool:
     threading.Thread(target=_monitor, daemon=True).start()
     print(f"{upper_id} 라인 트레이서를 시작했습니다. (PID: {process.pid})")
     return True
-
-
-def align_robot_heading(robot_id: str, target_yaw: float = 0.0, threshold: float = YAW_ALIGNMENT_THRESHOLD) -> None:
-    """Nav2 Spin 액션을 이용해 헤딩을 보정."""
-    global nav2_active_robot
-
-    if nav2_bridge is None or not hasattr(nav2_bridge, "spin"):
-        return
-
-    with control_lock:
-        state = robot_states.get(robot_id)
-        if state is None:
-            return
-        current_yaw = float(state.get("pose_yaw", 0.0))
-
-    delta = normalize_angle(target_yaw - current_yaw)
-    if abs(delta) <= threshold:
-        print(f"{robot_id} 헤딩 오차 {delta:.3f}rad → 보정 생략.")
-        return
-
-    print(f"{robot_id} 헤딩 보정 시작: 현재 {current_yaw:.3f}rad → 목표 {target_yaw:.3f}rad (회전 {delta:.3f}rad)")
-    with control_lock:
-        state = robot_states.get(robot_id)
-        if state is not None:
-            state["nav2_active"] = True
-            state["nav2_label"] = "yaw_align"
-    nav2_active_robot = robot_id
-
-    try:
-        result: Optional["Nav2Result"] = None
-        try:
-            result = nav2_bridge.spin(delta)  # type: ignore[attr-defined]
-        except Exception as exc:  # noqa: BLE001
-            print(f"{robot_id} 헤딩 보정 실패: {exc}")
-            return
-
-        if result:
-            print(f"{robot_id} 헤딩 보정 결과: {result.message}")
-    finally:
-        with control_lock:
-            state = robot_states.get(robot_id)
-            if state is not None:
-                state["nav2_active"] = False
-                if state.get("nav2_label") == "yaw_align":
-                    state["nav2_label"] = None
-        if nav2_active_robot == robot_id:
-            nav2_active_robot = None
 
 
 def schedule_next_nav2(robot_id: str) -> None:
@@ -782,17 +674,22 @@ def should_trigger_auto_stop(robot_id: str, category: str, x_center_norm: float)
             buffer.pop(0)
         if len(buffer) >= DETECTION_COUNT_THRESHOLD:
             buffer.clear()
-            # git 충돌 대비 bbang
-            # state["nav2_paused_label"] = expected_label
-            # state["nav2_paused_goal"] = state.get("nav2_goal")
-            # state["nav2_paused_yaw"] = state.get("nav2_goal_yaw", 0.0)
-            # state["nav2_label"] = None
-            # state["nav2_active"] = False
-            # state["nav2_manual_active"] = False
-            # git 충돌 대비 bbang 끝
-            state["nav2_paused_label"] = None
-            state["nav2_paused_goal"] = None
-            state["nav2_paused_yaw"] = None
+            paused_goal = state.get("nav2_goal")
+            if paused_goal is None:
+                spec = COMMAND_SPECS.get(expected_label, {})
+                if isinstance(spec, dict):
+                    paused_goal = spec.get("target", (0.0, 0.0))
+                else:
+                    paused_goal = (0.0, 0.0)
+            paused_yaw_raw = state.get("nav2_goal_yaw")
+            if isinstance(paused_yaw_raw, (int, float)):
+                paused_yaw = float(paused_yaw_raw)
+            else:
+                spec = COMMAND_SPECS.get(expected_label, {})
+                paused_yaw = float(spec.get("yaw", 0.0)) if isinstance(spec, dict) and spec.get("yaw") is not None else 0.0
+            state["nav2_paused_goal"] = paused_goal
+            state["nav2_paused_label"] = expected_label
+            state["nav2_paused_yaw"] = paused_yaw
             state["nav2_label"] = expected_label
             state["nav2_active"] = False
             state["nav2_manual_active"] = True
@@ -984,7 +881,7 @@ def authenticate_client(conn, addr):
 def handle_client(conn, addr, client_id, prefetched_data=b""):
     """클라이언트로부터 영상을 받아 처리하는 함수"""
     global output_frame, nav2_active_robot
-    conf_threshold = 0.6
+    conf_threshold = 0.4
     print(f"클라이언트 {addr}가 연결되었습니다. (ID: {client_id})")
     is_robot = client_id.upper().startswith("TURTLE")
     if is_robot:
@@ -1133,7 +1030,7 @@ def handle_client(conn, addr, client_id, prefetched_data=b""):
 
             if is_robot:
                 # YOLO 추론용 프레임 크기 설정
-                yolo_w = 640
+                yolo_w = 1280
                 yolo_h = int(yolo_w * (h_orig / w_orig))  # 종횡비를 유지한 높이 계산
                 resized_frame_for_yolo = cv2.resize(frame, (yolo_w, yolo_h))  # YOLO 입력용 프레임
                 font_base_width = yolo_w

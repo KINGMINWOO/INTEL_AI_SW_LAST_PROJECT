@@ -1,19 +1,19 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-The real-time streaming stack sits at the root: `server_highres_output.py` hosts YOLOv8 inference with Flask streaming, while `client.py` and `client_jpeg.py` push frames from edge devices. Training helpers (`train_model.sh`, `train_yolov5.py`, `train_yolov8.py`) wrap the vendor `yolov5/` directory. Datasets and label tools live in `classification_dataset_prepared/`, `tomato_geti_dataset/`, and `yolo_dataset_prepared/`, with rendered artifacts under `runs/`; Jetson/DeepStream experiments stay in `jetson/`.
+The Flask streaming server lives in `server_highres_output.py` and owns YOLOv8 inference, credential checks, and frame broadcast. Edge device clients sit alongside it: `client_jpeg.py` handles JPEG push, while `client_cctv.py`, `client_low_buff.py`, `client_turtle.py`, and `client_user.py` cover tailored transports. Training helpers (`train_yolov8.py` and the scripts under `yolov5/`) assume Ultralytics layouts; keep datasets in `classification_dataset_prepared/`, `tomato_geti_dataset/`, or `yolo_dataset_prepared/`, and capture training artifacts under `runs/`. Reference `PROJECT_GUIDE.md` for deployment specifics and `requirements.txt` for Python dependencies.
 
 ## Build, Test, and Development Commands
-Run `python3 server_highres_output.py` to start the authenticated server; monitor individual uplinks at `/video_feed/<client_id>`. Use `python3 client_jpeg.py` for the JPEG uplink or `python3 client.py` for the pickle stream; both expect credentials from `idlist.txt`. Train via `bash train_model.sh` or `python3 train_yolov5.py` (YOLOv5) and `python3 train_yolov8.py` (YOLOv8). Validate labels with `python3 verify_labels.py`, adjusting the sample paths before use.
+Use `python3 server_highres_output.py` to launch the authenticated server and preview feeds at `/video_feed/<client_id>`. Trigger a JPEG uplink with `python3 client_jpeg.py --id <client> --password <secret>`; align credentials with `idlist.txt`. Train YOLOv8 locally via `python3 train_yolov8.py --data <config.yaml>`, and fall back to the vendor helpers for YOLOv5 (`python3 train_yolov5.py`). Run `python3 verify_labels.py` after pointing it to a sample batch to sanity-check annotations.
 
 ## Coding Style & Naming Conventions
-Follow Python 3 PEP 8: four-space indentation, snake_case for functions, and UPPER_CASE for constants such as handshake tokens or IPs. Mirror Ultralytics naming when editing `yolov5/` scripts, and keep hardware configuration near the top of each module. Brief docstrings on new threads or sockets help other agents understand lifecycle boundaries.
+Conform to PEP 8: four-space indentation, `snake_case` functions, `CamelCase` classes, and `UPPER_CASE` constants for network tokens or device IDs. Keep hardware or model configuration constants near the top of each module, mirror Ultralytics naming when editing files in `yolov5/`, and add concise docstrings when spawning new threads or sockets to clarify lifecycle expectations.
 
 ## Testing Guidelines
-No CI yet; run `python3 -m compileall <file>` for quick syntax checks. Pair `server_highres_output.py` with `client_jpeg.py` to confirm authentication, client-specific streams (`/video_feed/<client_id>`), FPS overlay, and detection callbacks before merging. After training, review metrics and sample frames in `runs/`, and document any dataset or label conversions in your PR.
+With no automated CI, run `python3 -m compileall server_highres_output.py client_jpeg.py` to catch syntax issues early. Manually pair the server with the relevant client script to confirm authentication, per-client feeds, FPS overlays, and detection callbacks before merging. After training, inspect the latest `runs/` artifacts and log any dataset conversions directly in your change notes.
 
 ## Commit & Pull Request Guidelines
-Keep commits small, imperative (e.g., “Add credential handshake”), and scoped. Note manual validation (server/client pairing, training epoch) in commit bodies or PRs. Each PR should link tracking issues, summarize behaviour changes, and include screenshots or detection snippets when outputs change.
+Write imperative, scoped commits (e.g., “Add JPEG client retry logic”), and call out manual validation such as server–client smoke tests or training epochs. Pull requests should summarize behavioural changes, link tracking issues, and include screenshots or detection snippets whenever output frames or metrics change.
 
 ## Security & Configuration Tips
-Manage credentials in `idlist.txt` using `id:password`; avoid committing production secrets. Update matching values in each client before deployment and watch the server log for “인증 성공” to confirm access. Rotate IDs and weights when sharing with external devices, and prefer environment overrides for local paths.
+Store credentials as `id:password` pairs in `idlist.txt`, keep secrets out of history, and sync updates across every deployed client. Watch the server log for “인증 성공” after each credential change, rotate IDs and model weights before sharing hardware externally, and lean on environment variables for local path overrides.
