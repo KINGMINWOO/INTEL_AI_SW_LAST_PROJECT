@@ -17,10 +17,10 @@ class LineTracerRemote(Node):
         self._shutdown_timer = self.create_timer(0.1, self._handle_shutdown_request)
 
         # === [추가된 설정] 좌우 회전 각도 ===
-        self._left_sweep_angle = math.radians(100)   # 왼쪽 100도
-        self._right_sweep_angle = math.radians(45)   # 오른쪽 45도
+        self._left_sweep_angle = math.radians(80)   # 왼쪽 80도
+        self._right_sweep_angle = math.radians(80)   # 오른쪽 80도
 
-        self._scan_angular_speed = 0.6               # 회전 속도 (rad/s)
+        self._scan_angular_speed = 0.3               # 회전 속도 (rad/s)
         self._calibration_active = True
         self._calibration_direction = 1.0            # +1: 왼쪽, -1: 오른쪽
         self._calibration_remaining = self._left_sweep_angle
@@ -28,8 +28,12 @@ class LineTracerRemote(Node):
         self._calibration_timer = self.create_timer(0.05, self._handle_calibration_step)
         self._last_calibration_sensor = None
 
-        self.linear_speed = 0.08
-        self.angular_speed = 0.2
+        # ✅ 라인 탐색 제한 관련 변수 초기화
+        self._max_calibration_duration = 10.0      # 탐색 제한 시간 (초)
+        self._calibration_start_time = None        # 탐색 시작 시점 (아직 시작 안 함)
+
+        self.linear_speed = 0.02
+        self.angular_speed = 0.05
         self.get_logger().info("💻 Remote Line Tracer Started!")
         self.get_logger().info("라인 추적 준비: 센서 [1,1]을 찾기 위해 좌/우 회전을 시작합니다.")
 
@@ -78,12 +82,17 @@ class LineTracerRemote(Node):
         rclpy.shutdown()
         os._exit(0)
 
-    # === 🔸 수정된 회전 단계 로직 ===
+    # === 수정된 회전 단계 로직 ===
     def _handle_calibration_step(self):
         if not self._calibration_active:
             return
 
         now = self.get_clock().now()
+
+        # ✅ 탐색 시작 시점에 한 번만 초기화
+        if self._calibration_start_time is None:
+            self._calibration_start_time = now
+
         delta = (now - self._last_calibration_time).nanoseconds / 1e9
         self._last_calibration_time = now
         self._calibration_remaining -= abs(self._scan_angular_speed) * delta
@@ -95,15 +104,27 @@ class LineTracerRemote(Node):
         # 회전 각도 제한 도달 시 방향 전환
         if self._calibration_remaining <= 0.0:
             if self._calibration_direction > 0:
-                # 왼쪽 스캔 완료 → 오른쪽으로 전환 (45도)
+                # 왼쪽 스캔 완료 → 오른쪽으로 전환 (80도)
                 self._calibration_direction = -1.0
                 self._calibration_remaining = self._right_sweep_angle
-                self.get_logger().info("라인 추적 준비: 오른쪽으로 회전 (45도)")
+                self.get_logger().info("라인 추적 준비: 오른쪽으로 회전 (80도)")
             else:
-                # 오른쪽 스캔 완료 → 왼쪽으로 전환 (100도)
+                # 오른쪽 스캔 완료 → 왼쪽으로 전환 (80도)
                 self._calibration_direction = 1.0
                 self._calibration_remaining = self._left_sweep_angle
-                self.get_logger().info("라인 추적 준비: 왼쪽으로 회전 (100도)")
+                self.get_logger().info("라인 추적 준비: 왼쪽으로 회전 (80도)")
+
+        # # ✅ [추가] 일정 시간 동안 라인 감지 실패 시 서버로 재시도 요청
+        # elapsed = (now - self._calibration_start_time).nanoseconds / 1e9
+        # if elapsed > self._max_calibration_duration:
+        #     self.get_logger().warn("라인을 찾지 못했습니다. dump@done 재시도 요청을 전송합니다.")
+        #     try:
+        #         # 서버로 'LINE_NOT_FOUND' 메시지를 소켓 전송 (netcat 사용)
+        #         os.system("echo 'LINE_NOT_FOUND' | nc 127.0.0.1 9999 &")
+        #     except Exception as e:
+        #         self.get_logger().error(f"라인 재시도 신호 전송 실패: {e}")
+        #     # 노드 종료 처리 (라인 트레이서 종료)
+        #     self._shutdown_requested = True
 
     def _process_calibration_reading(self, raw_left: int, raw_right: int) -> None:
         current = (raw_left, raw_right)
