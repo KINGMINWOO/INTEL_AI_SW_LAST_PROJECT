@@ -33,7 +33,7 @@ except Exception as farm_storage_import_error:  # noqa: BLE001
 
 DETECTION_WINDOW_SECONDS = 3.0
 DETECTION_COUNT_THRESHOLD = 1
-ABS_CENTER_THRESHOLD = 0.5
+ABS_CENTER_THRESHOLD = 0.05
 POSE_LOG_INTERVAL_SECONDS = 5.0
 YAW_ALIGNMENT_THRESHOLD = 0.01
 
@@ -85,7 +85,7 @@ CREDENTIAL_FILE = BASE_DIR / "idlist.txt"
 AUTH_PROMPT = b"AUTH_REQUEST\n"
 AUTH_OK = b"AUTH_OK\n"
 AUTH_FAIL = b"AUTH_FAIL\n"
-LINE_TRACER_SCRIPT = (BASE_DIR / "line_tracer_remote.py").resolve()
+LINE_TRACER_SCRIPT = (BASE_DIR.parent / "3.Robot" / "1.ROS" / "line_tracer_remote.py").resolve()
 LINE_TRACER_STOP_TIMEOUT = 2.0
 
 DUMP_STAGE_TARGET = (-0.166, -0.227)
@@ -210,11 +210,9 @@ line_tracer_processes: dict[str, subprocess.Popen] = {}
 def handle_line_tracer_exit(robot_id: str, return_code: Optional[int]) -> None:
     """라인 트레이서 프로세스 종료 후 로봇 주행 상태를 정리."""
     upper_id = robot_id.upper()
-    print(f"DEBUG: {upper_id} handle_line_tracer_exit 호출됨 (exit code: {return_code})")
     should_stop = False
     manual_label: Optional[str] = None
     is_paused = False
-    is_killed_by_recovery = return_code == -9
 
     with control_lock:
         state = robot_states.get(upper_id)
@@ -237,8 +235,6 @@ def handle_line_tracer_exit(robot_id: str, return_code: Optional[int]) -> None:
             if manual_active and nav_label in LINE_TRACER_LABELS and not stop_sent:
                 state["stop_sent"] = True
                 should_stop = True
-
-    # 이 로직은 크게 의미 없지만, 디버깅을 위해 유지
     if should_stop:
         print(f"{upper_id} 라인 트레이서 종료 감지(exit={return_code}) → STOP 명령 전송.")
         send_stop_to_robot(upper_id)
@@ -246,8 +242,7 @@ def handle_line_tracer_exit(robot_id: str, return_code: Optional[int]) -> None:
         print(f"{upper_id} 라인 트레이서 종료 감지(exit={return_code}).")
 
     if manual_label in LINE_TRACER_LABELS:
-        # 자동 복구로 강제 종료된 경우, 일시정지가 아닌 완료로 처리
-        if is_paused and not is_killed_by_recovery:
+        if is_paused:
             print(f"{upper_id} 라인 트레이서가 일시 중지되었습니다. 로봇팔의 동작을 기다립니다.")
             with control_lock:
                 state = robot_states.get(upper_id)
@@ -257,11 +252,7 @@ def handle_line_tracer_exit(robot_id: str, return_code: Optional[int]) -> None:
                     state["stop_sent"] = False
             stop_line_tracer(upper_id, wait_timeout=0.1)
         else:
-            if is_killed_by_recovery:
-                print(f"INFO: {upper_id} 자동 복구된 라인 트레이서를 완료 처리하고 다음 큐로 진행합니다.")
-            else:
-                print(f"{upper_id} 라인 트레이서 이동 완료: 큐 다음 단계로 진행")
-            
+            print(f"{upper_id} 라인 트레이서 이동 완료: 큐 다음 단계로 진행")
             with control_lock:
                 state = robot_states.get(upper_id)
                 if state is not None:
@@ -389,66 +380,47 @@ def start_line_tracer(robot_id: str) -> bool:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            bufsize=1, # Line buffered
+            bufsize=1,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         print(f"{upper_id} 라인 트레이서 실행 실패: {exc}")
         return False
     with line_tracer_lock:
         line_tracer_processes[upper_id] = process
-
-    def _monitor_and_read() -> None:
-        """프로세스 출력을 읽고, 멈춤을 감지하면 자동 복구를 시도합니다."""
-        print(f"DEBUG: {upper_id} _monitor_and_read 스레드 시작.")
-        exit_message_seen = False
-        if process.stdout:
-            try:
-                for raw_line in iter(process.stdout.readline, ""):
-                    if not raw_line:
-                        break
-                    line = raw_line.rstrip("\n")
-                    print(f"[{upper_id} LINE] {line}")
-                    if "라인 트레이서를 종료합니다" in line:
-                        print(f"DEBUG: {upper_id} 라인 트레이서 종료 메시지 감지. 2초 후에도 종료되지 않으면 자동 복구 실행.")
-                        exit_message_seen = True
-                        # 종료 메시지를 봤으므로, 출력을 더 읽을 필요 없이 다음 단계로 넘어갑니다.
-                        break
-            except Exception as exc:
-                print(f"{upper_id} 라인 트레이서 출력 수집 중 오류: {exc}")
-            finally:
-                try:
-                    process.stdout.close()
-                except Exception:
-                    pass
-        
-        print(f"DEBUG: {upper_id} stdout 읽기 루프 종료. exit_message_seen={exit_message_seen}")
-        return_code = None
+    def _read_output() -> None:
+        if process.stdout is None:
+            return
         try:
-            # 종료 메시지를 봤다면 2초, 아니면 일반적인 종료를 기다립니다.
-            timeout = 2.0 if exit_message_seen else 30.0
-            print(f"DEBUG: {upper_id} process.wait() 호출 (timeout={timeout})")
-            return_code = process.wait(timeout=timeout)
-            print(f"DEBUG: {upper_id} process.wait() 반환. return_code={return_code}")
-        except subprocess.TimeoutExpired:
-            print(f"INFO: {upper_id} 라인 트레이서가 멈춘 것으로 판단되어 자동 복구를 시작합니다.")
-            # 사용자가 'stop'을 누른 것과 동일한 효과를 냅니다.
-            cancel_nav2_navigation(upper_id)
-            print(f"DEBUG: {upper_id} 자동 복구 후 process.wait() 재호출")
+            for raw_line in process.stdout:
+                line = raw_line.rstrip("\n")
+                if not line:
+                    continue
+                print(f"[{upper_id} LINE] {line}")
+                if "라인 트레이서 종료 신호 수신" in line:
+                    print(f"{upper_id} 라인 트레이서 종료 신호 감지. 프로세스를 강제 종료합니다.")
+                    stop_line_tracer(upper_id)
+                    break
+        except Exception as exc:  # noqa: BLE001
+            print(f"{upper_id} 라인 트레이서 출력 수집 중 오류: {exc}")
+        finally:
+            try:
+                process.stdout.close()
+            except Exception:  # noqa: BLE001
+                pass
+    def _monitor() -> None:
+        return_code: Optional[int] = None
+        try:
             return_code = process.wait()
-            print(f"DEBUG: {upper_id} 재호출된 process.wait() 반환. return_code={return_code}")
-        except Exception as exc:
-             print(f"{upper_id} 라인 트레이서 모니터링 오류: {exc}")
-             return_code = -997
-
-        with line_tracer_lock:
-            existing = line_tracer_processes.get(upper_id)
-            if existing is process:
-                line_tracer_processes.pop(upper_id, None)
-        
-        print(f"DEBUG: {upper_id} handle_line_tracer_exit 호출 직전.")
-        handle_line_tracer_exit(upper_id, return_code)
-
-    threading.Thread(target=_monitor_and_read, daemon=True).start()
+        except Exception as exc:  # noqa: BLE001
+            print(f"{upper_id} 라인 트레이서 모니터링 오류: {exc}")
+        finally:
+            with line_tracer_lock:
+                existing = line_tracer_processes.get(upper_id)
+                if existing is process:
+                    line_tracer_processes.pop(upper_id, None)
+            handle_line_tracer_exit(upper_id, return_code)
+    threading.Thread(target=_read_output, daemon=True).start()
+    threading.Thread(target=_monitor, daemon=True).start()
     print(f"{upper_id} 라인 트레이서를 시작했습니다. (PID: {process.pid})")
     return True
 

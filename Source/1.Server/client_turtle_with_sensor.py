@@ -278,10 +278,15 @@ class MotionController:
 
     def cancel(self) -> None:
         with self._lock:
+            # If not actively moving or turning, do nothing.
+            if self._target is None and not self._manual_active:
+                return
             self._target = None
             self._manual_active = False
             self._cancel_requested = True
         self._bridge.send_velocity(0.0, 0.0)
+        # Notify the server that the current task was cancelled and the robot is idle.
+        self._notify_cb("stop@done")
         print("[모션] 이동 취소 및 정지")
 
     def stop(self) -> None:
@@ -294,7 +299,6 @@ class MotionController:
         max_speed = 0.35
         min_speed = 0.05
         goal_tolerance = 0.03
-        lateral_tolerance = 0.1
 
         while self._running:
             with self._lock:
@@ -320,11 +324,10 @@ class MotionController:
                 time.sleep(0.05)
                 continue
 
+            # target is not None here
             dx = target[0] - rel_x
             dy = target[1] - rel_y
             distance = math.hypot(dx, dy)
-            forward = dx * math.cos(yaw) + dy * math.sin(yaw)
-            lateral = -dx * math.sin(yaw) + dy * math.cos(yaw)
 
             if distance <= goal_tolerance:
                 self._bridge.send_velocity(0.0, 0.0)
@@ -335,12 +338,23 @@ class MotionController:
                 time.sleep(0.05)
                 continue
 
-            if abs(lateral) > lateral_tolerance:
-                print(f"[모션] 좌우 오차 {lateral:.3f}m (yaw={yaw:.3f})")
+            target_yaw = math.atan2(dy, dx)
+            yaw_error = normalize_angle(target_yaw - yaw)
 
-            speed = kp * forward
-            speed = max(min(speed, max_speed), min_speed)
-            self._bridge.send_velocity(speed, 0.0)
+            linear_speed = 0.0
+            angular_speed = 0.0
+
+            # State-based controller: 1. Turn, 2. Move
+            if abs(yaw_error) > YAW_TOLERANCE:
+                # State 1: Turn to face the target
+                angular_speed = ANGULAR_KP * yaw_error
+                angular_speed = max(min(angular_speed, MAX_ANGULAR_SPEED), -MAX_ANGULAR_SPEED)
+            else:
+                # State 2: Move towards the target
+                linear_speed = kp * distance
+                linear_speed = max(min(linear_speed, max_speed), min_speed)
+
+            self._bridge.send_velocity(linear_speed, angular_speed)
             time.sleep(0.05)
 def configure_capture() -> Tuple[cv2.VideoCapture, float]:
     """카메라를 빠르게 초기화하고 센서 FPS를 반환."""
