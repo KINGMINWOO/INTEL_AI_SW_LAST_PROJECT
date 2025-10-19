@@ -30,25 +30,25 @@ except Exception as farm_storage_import_error:
     print(f"농가 데이터 로거를 불러오지 못했습니다: {farm_storage_import_error}")
 
 # --- Global Constants and Configuration ---
-DETECTION_WINDOW_SECONDS = 3.0
-DETECTION_COUNT_THRESHOLD = 1
-ABS_CENTER_THRESHOLD = 0.3
+DETECTION_WINDOW_SECONDS = 2.0
+DETECTION_COUNT_THRESHOLD = 2
+ABS_CENTER_THRESHOLD = 0.37
 AUTO_STOP_TARGET_X = 1.0
 POSE_LOG_INTERVAL_SECONDS = 5.0
 YAW_ALIGNMENT_THRESHOLD = 0.01
 
 COMMAND_SPECS: dict[str, dict[str, Optional[float] | tuple[float, float] | str]] = {
     "ripe@go": {"mode": "line_trace"},
-    "ripe@done": {"mode": "nav2", "target": (1.817, 0.8), "yaw": 3.117},
+    "ripe@done": {"mode": "nav2", "target": (1.817, 0.8), "yaw": -2.8},
     "rotten@go": {"mode": "line_trace"},
     "rotten@done": {"mode": "nav2", "target": (0.1, 0.8), "yaw": -0.263},
     "check1point": {"mode": "nav2", "target": (1.5, 0.4), "yaw": math.pi * 0.4},
     "check2@point": {"mode": "nav2", "target": (0.8, 0.4), "yaw": math.pi},
     "check3@point": {"mode": "nav2", "target": (0.8, 0.4), "yaw": math.pi},
     "check4@point": {"mode": "nav2", "target": (0.4, 0.4), "yaw": math.pi * -0.5},
-    "dump@done": {"mode": "nav2", "target": (0.0, 0.0), "yaw": 0.0},
-    "dump1@done": {"mode": "nav2", "target": (0.0, 0.0), "yaw": 0.0},
-    "dump2@done": {"mode": "nav2", "target": (0.0, 0.0), "yaw": 0.0},
+    "dump@done": {"mode": "nav2", "target": (0.0, -0.05), "yaw": 0.0},
+    "dump1@done": {"mode": "nav2", "target": (0.0, -0.05), "yaw": 0.0},
+    "dump2@done": {"mode": "nav2", "target": (0.0, -0.05), "yaw": 0.0},
 }
 
 NAV2_QUEUE_TEMPLATES: dict[str, list[str]] = {
@@ -658,10 +658,10 @@ def trigger_and_handle_auto_stop(client_id: str, conn, y_center_norm: float):
                 print(f"INFO: {upper_id} 자동 정지 발생 – 현재 명령을 일시 정지합니다.")
         cancel_nav2_navigation(upper_id, wait=True)
         send_stop_to_robot(client_id)
-        if y_center_norm < 1.0 / 3:
+        if y_center_norm < 1.5 / 3:
             arm_topic = "robot@high"
-        elif y_center_norm < 2.0 / 3:
-            arm_topic = "robot@middle"
+        elif y_center_norm < 2 / 3:
+            arm_topic = "robot@mid"
         else:
             arm_topic = "robot@low"
         payload = f"{arm_topic}\n".encode("utf-8")
@@ -675,7 +675,7 @@ def trigger_and_handle_auto_stop(client_id: str, conn, y_center_norm: float):
 
 def handle_client(conn, addr, client_id, prefetched_data=b""):
     global output_frame, nav2_active_robot
-    conf_threshold = 0.4
+    conf_threshold = 0.35
     print(f"클라이언트 {addr}가 연결되었습니다. (ID: {client_id})")
     upper_id = client_id.upper()
     is_robot = client_id.upper().startswith("TURTLE")
