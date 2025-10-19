@@ -56,12 +56,12 @@ class Nav2Bridge(Node):
         self._goal_lock = threading.Lock()
         self._current_goal_handle: Optional[object] = None
 
-        if not self._action_client.wait_for_server(timeout_sec=5.0):
+        if not self._action_client.wait_for_server(timeout_sec=15.0):
             self.get_logger().error("Nav2 NavigateToPose 액션 서버를 찾지 못했습니다.")
             raise RuntimeError("NAV2_SERVER_UNAVAILABLE")
         self.get_logger().info("Nav2 NavigateToPose 액션 서버 연결 완료")
         if self._spin_client is not None:
-            if not self._spin_client.wait_for_server(timeout_sec=5.0):
+            if not self._spin_client.wait_for_server(timeout_sec=15.0):
                 self.get_logger().warning("Nav2 Spin 액션 서버를 찾지 못했습니다. 헤딩 보정 기능 비활성화.")
                 self._spin_client = None
 

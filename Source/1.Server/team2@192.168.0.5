@@ -35,7 +35,7 @@ CLIENT_ID = "TURTLE01"
 CLIENT_PASSWORD = "TURTLE1234"
 
 #SERVER_ADDR: Tuple[str, int] = ("10.10.16.29", 9999)
-SERVER_ADDR: Tuple[str, int] = ("192.168.0.4", 9999)
+SERVER_ADDR: Tuple[str, int] = ("127.0.0.1", 9999)
 FRAME_SIZE = (1280,720)  # (width, height)
 TARGET_FPS = 40        # 0 => no sleep, otherwise throttle
 JPEG_QUALITY = 85
@@ -235,20 +235,6 @@ class OdometryBridge:
             return self._node.get_ros_time()
         return time.time()
 
-    def to_world(self, point: Tuple[float, float]) -> Tuple[float, float]:
-        with self._lock:
-            if self._origin is None:
-                return point
-            ox, oy = self._origin
-        return (point[0] + ox, point[1] + oy)
-
-    def to_relative(self, x: float, y: float) -> Tuple[float, float]:
-        with self._lock:
-            if self._origin is None:
-                return (x, y)
-            ox, oy = self._origin
-        return (x - ox, y - oy)
-
 
 class MotionController:
     """직선/회전/라인추적 제어를 수행하는 통합 컨트롤러."""
@@ -268,10 +254,10 @@ class MotionController:
         self._cancel_requested = False
 
         # Line tracer states
-        self._lt_left_sweep_angle = math.radians(90)
-        self._lt_right_sweep_angle = math.radians(90)
+        self._lt_left_sweep_angle = math.radians(180)
+        self._lt_right_sweep_angle = math.radians(180)
         self._lt_scan_angular_speed = 0.6
-        self._lt_linear_speed = 0.02
+        self._lt_linear_speed = 0.1
         self._lt_angular_speed = 0.1
         self._lt_calibration_active = False
         self._lt_calibration_direction = 1.0

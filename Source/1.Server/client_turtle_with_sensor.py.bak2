@@ -15,13 +15,13 @@ try:
     from geometry_msgs.msg import Twist
     from nav_msgs.msg import Odometry
     from rclpy.node import Node
-    from rclpy.time import Time
+    from std_msgs.msg import Int32MultiArray
 except ImportError:  # noqa: F401
     rclpy = None  # type: ignore
     Odometry = None  # type: ignore
     Node = None  # type: ignore
     Twist = None  # type: ignore
-    Time = None # type: ignore
+    Int32MultiArray = None # type: ignore
 
 try:
     import RPi.GPIO as GPIO
@@ -35,7 +35,7 @@ CLIENT_ID = "TURTLE01"
 CLIENT_PASSWORD = "TURTLE1234"
 
 #SERVER_ADDR: Tuple[str, int] = ("10.10.16.29", 9999)
-SERVER_ADDR: Tuple[str, int] = ("192.168.0.4", 9999)
+SERVER_ADDR: Tuple[str, int] = ("127.0.0.1", 9999)
 FRAME_SIZE = (1280,720)  # (width, height)
 TARGET_FPS = 40        # 0 => no sleep, otherwise throttle
 JPEG_QUALITY = 85
@@ -71,19 +71,19 @@ def try_set_fourcc(cap: cv2.VideoCapture, fourcc: str) -> bool:
     applied = decode_fourcc(cap.get(cv2.CAP_PROP_FOURCC))
     return applied == fourcc
 
+
 def normalize_angle(angle: float) -> float:
     return (angle + math.pi) % (2 * math.pi) - math.pi
 
 
 class OdometryBridge:
-    """ROS2 오도메트리 구독, 라인 센서 읽기, cmd_vel 발행을 통합한 브리지."""
+    """ROS2 오도메트리 구독, 라인 센서 발행, cmd_vel 발행을 통합한 브리지."""
 
     def __init__(self, odom_topic: str = ODOM_TOPIC, cmd_vel_topic: str = "/cmd_vel") -> None:
         self.odom_topic = odom_topic
         self.cmd_vel_topic = cmd_vel_topic
         self._lock = threading.Lock()
-        self._latest_pose: Tuple[float, float, float] = (0.0, 0.0, 0.0)
-        self._latest_sensor: Tuple[int, int] = (0, 0)
+        self._latest: Tuple[float, float, float] = (0.0, 0.0, 0.0)
         self._has_pose = False
         self._origin: Optional[Tuple[float, float]] = None
         self._thread: Optional[threading.Thread] = None
@@ -99,20 +99,21 @@ class OdometryBridge:
             self.create_subscription(Odometry, odom_topic, self._odom_callback, 10)
             self._gpio_initialized = False
 
-            if GPIO:
+            if GPIO and Int32MultiArray:
                 try:
+                    self._line_pub = self.create_publisher(Int32MultiArray, '/line_sensor', 10)
                     GPIO.setmode(GPIO.BCM)
                     self._left_pin = 17
                     self._right_pin = 27
                     GPIO.setup(self._left_pin, GPIO.IN)
                     GPIO.setup(self._right_pin, GPIO.IN)
-                    self.create_timer(0.05, self._read_line_sensor) # 20Hz
-                    self.get_logger().info("📡 Line Sensor GPIO integration enabled.")
+                    self.create_timer(0.1, self._publish_line_sensor)
+                    self.get_logger().info("📡 Line Sensor Publisher integration enabled.")
                     self._gpio_initialized = True
                 except Exception as e:
                     self.get_logger().error(f"Failed to initialize GPIO for line sensor: {e}")
             else:
-                self.get_logger().warn("RPi.GPIO not found, line sensor is disabled.")
+                self.get_logger().warn("RPi.GPIO or ROS2 msgs not found, line sensor publisher is disabled.")
 
         def _odom_callback(self, msg: Odometry) -> None:
             pose = msg.pose.pose
@@ -122,15 +123,17 @@ class OdometryBridge:
                 quaternion_to_yaw(pose.orientation.w, pose.orientation.x, pose.orientation.y, pose.orientation.z),
             )
 
-        def _read_line_sensor(self) -> None:
+        def _publish_line_sensor(self) -> None:
             if not self._gpio_initialized:
                 return
             try:
                 L = GPIO.input(self._left_pin)
                 R = GPIO.input(self._right_pin)
-                self._parent._set_line_sensor((L, R))
+                msg = Int32MultiArray()
+                msg.data = [L, R]
+                self._line_pub.publish(msg)
             except Exception as e:
-                self.get_logger().error(f"Error reading line sensor data: {e}")
+                self.get_logger().error(f"Error reading/publishing line sensor data: {e}")
 
         def publish_velocity(self, linear_x: float, angular_z: float) -> None:
             twist = Twist()
@@ -142,9 +145,6 @@ class OdometryBridge:
             if self._gpio_initialized:
                 GPIO.cleanup()
                 self.get_logger().info("GPIO cleaned up.")
-        
-        def get_ros_time(self) -> float:
-            return self.get_clock().now().nanoseconds / 1e9
 
     def start(self) -> bool:
         if rclpy is None or Node is None or Odometry is None or Twist is None:
@@ -162,7 +162,7 @@ class OdometryBridge:
             self._running = True
             self._thread = threading.Thread(target=self._spin, daemon=True)
             self._thread.start()
-            print(f"ROS2 브리지 시작: 오도메트리({self.odom_topic}), 라인센서(GPIO)")
+            print(f"ROS2 브리지 시작: 오도메트리({self.odom_topic}), 라인센서(/line_sensor)")
             return True
         except Exception as exc:  # noqa: BLE001
             print(f"ROS2 브리지 초기화 실패: {exc}")
@@ -202,24 +202,16 @@ class OdometryBridge:
         with self._lock:
             if self._origin is None:
                 self._origin = (x, y)
-            self._latest_pose = (x, y, yaw)
+            self._latest = (x, y, yaw)
             self._has_pose = True
-    
-    def _set_line_sensor(self, sensor_data: Tuple[int, int]) -> None:
-        with self._lock:
-            self._latest_sensor = sensor_data
 
     def get_pose(self, *, relative: bool = False) -> Tuple[float, float, float]:
         with self._lock:
-            x, y, yaw = self._latest_pose
+            x, y, yaw = self._latest
             if relative and self._origin is not None:
                 ox, oy = self._origin
                 return (x - ox, y - oy, yaw)
             return (x, y, yaw)
-
-    def get_line_sensor(self) -> Tuple[int, int]:
-        with self._lock:
-            return self._latest_sensor
 
     def has_pose(self) -> bool:
         with self._lock:
@@ -229,11 +221,6 @@ class OdometryBridge:
         if self._node is None:
             return
         self._node.publish_velocity(linear_x, angular_z)
-
-    def get_time(self) -> float:
-        if self._node:
-            return self._node.get_ros_time()
-        return time.time()
 
     def to_world(self, point: Tuple[float, float]) -> Tuple[float, float]:
         with self._lock:
@@ -251,34 +238,18 @@ class OdometryBridge:
 
 
 class MotionController:
-    """직선/회전/라인추적 제어를 수행하는 통합 컨트롤러."""
+    """간단한 직선/회전 제어를 수행하는 컨트롤러."""
 
     def __init__(self, bridge: OdometryBridge, notify_cb) -> None:
         self._bridge = bridge
         self._notify_cb = notify_cb
-        self._lock = threading.Lock()
-        self._running = True
-        
-        # Motion states
         self._target: Optional[Tuple[float, float]] = None
         self._manual_active = False
         self._manual_linear = 0.0
         self._manual_angular = 0.0
-        self._line_tracing_active = False
+        self._lock = threading.Lock()
         self._cancel_requested = False
-
-        # Line tracer states
-        self._lt_left_sweep_angle = math.radians(90)
-        self._lt_right_sweep_angle = math.radians(90)
-        self._lt_scan_angular_speed = 0.6
-        self._lt_linear_speed = 0.02
-        self._lt_angular_speed = 0.1
-        self._lt_calibration_active = False
-        self._lt_calibration_direction = 1.0
-        self._lt_calibration_remaining = 0.0
-        self._lt_last_calibration_time = 0.0
-        self._lt_tracking_started = False
-
+        self._running = True
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
 
@@ -289,7 +260,6 @@ class MotionController:
         with self._lock:
             self._target = target
             self._manual_active = False
-            self._line_tracing_active = False
             self._cancel_requested = False
         print(f"[모션] 목표 좌표 rel({target[0]:.2f}, {target[1]:.2f}) 이동 시작")
 
@@ -299,7 +269,6 @@ class MotionController:
             return
         with self._lock:
             self._target = None
-            self._line_tracing_active = False
             self._manual_linear = linear
             self._manual_angular = angular
             self._manual_active = abs(linear) > 1e-4 or abs(angular) > 1e-4
@@ -307,35 +276,18 @@ class MotionController:
         if not self._manual_active:
             self._bridge.send_velocity(0.0, 0.0)
 
-    def start_line_tracing(self) -> None:
-        if not self._bridge.start():
-            print("ROS2 브리지를 시작할 수 없어 라인 추적을 건너뜁니다.")
-            return
-        print("[모션] 라인 추적 시작")
-        with self._lock:
-            self._target = None
-            self._manual_active = False
-            self._cancel_requested = False
-            self._line_tracing_active = True
-            # Initialize calibration state
-            self._lt_calibration_active = True
-            self._lt_tracking_started = False
-            self._lt_calibration_direction = 1.0
-            self._lt_calibration_remaining = self._lt_left_sweep_angle
-            self._lt_last_calibration_time = self._bridge.get_time()
-        print("[모션] 라인 추적 준비: 센서 [1,1]을 찾기 위해 좌/우 회전을 시작합니다.")
-
     def cancel(self) -> None:
         with self._lock:
-            if self._target is None and not self._manual_active and not self._line_tracing_active:
+            # If not actively moving or turning, do nothing.
+            if self._target is None and not self._manual_active:
                 return
             self._target = None
             self._manual_active = False
-            self._line_tracing_active = False
             self._cancel_requested = True
         self._bridge.send_velocity(0.0, 0.0)
+        # Notify the server that the current task was cancelled and the robot is idle.
         self._notify_cb("stop@done")
-        print("[모션] 모든 이동 취소 및 정지")
+        print("[모션] 이동 취소 및 정지")
 
     def stop(self) -> None:
         self._running = False
@@ -343,17 +295,20 @@ class MotionController:
         self._thread.join(timeout=1.0)
 
     def _loop(self) -> None:
+        kp = 0.8
+        max_speed = 0.35
+        min_speed = 0.05
+        goal_tolerance = 0.03
+
         while self._running:
             with self._lock:
-                # Copy states to local variables
-                is_line_tracing = self._line_tracing_active
-                is_manual = self._manual_active
-                target_point = self._target
+                target = self._target
+                manual_active = self._manual_active
                 manual_linear = self._manual_linear
                 manual_angular = self._manual_angular
-                is_cancelled = self._cancel_requested
+                cancelled = self._cancel_requested
 
-            if is_cancelled or (not is_line_tracing and not is_manual and target_point is None):
+            if cancelled or (target is None and not manual_active):
                 time.sleep(0.05)
                 continue
 
@@ -361,119 +316,46 @@ class MotionController:
                 self._bridge.send_velocity(0.0, 0.0)
                 time.sleep(0.05)
                 continue
-            
-            if is_line_tracing:
-                self._line_tracer_step()
-            elif is_manual:
+
+            rel_x, rel_y, yaw = self._bridge.get_pose(relative=True)
+
+            if manual_active:
                 self._bridge.send_velocity(manual_linear, manual_angular)
-            elif target_point is not None:
-                self._move_to_step(target_point)
-            
+                time.sleep(0.05)
+                continue
+
+            # target is not None here
+            dx = target[0] - rel_x
+            dy = target[1] - rel_y
+            distance = math.hypot(dx, dy)
+
+            if distance <= goal_tolerance:
+                self._bridge.send_velocity(0.0, 0.0)
+                with self._lock:
+                    self._target = None
+                    self._cancel_requested = False
+                self._notify_cb("move@done")
+                time.sleep(0.05)
+                continue
+
+            target_yaw = math.atan2(dy, dx)
+            yaw_error = normalize_angle(target_yaw - yaw)
+
+            linear_speed = 0.0
+            angular_speed = 0.0
+
+            # State-based controller: 1. Turn, 2. Move
+            if abs(yaw_error) > YAW_TOLERANCE:
+                # State 1: Turn to face the target
+                angular_speed = ANGULAR_KP * yaw_error
+                angular_speed = max(min(angular_speed, MAX_ANGULAR_SPEED), -MAX_ANGULAR_SPEED)
+            else:
+                # State 2: Move towards the target
+                linear_speed = kp * distance
+                linear_speed = max(min(linear_speed, max_speed), min_speed)
+
+            self._bridge.send_velocity(linear_speed, angular_speed)
             time.sleep(0.05)
-
-    def _move_to_step(self, target: Tuple[float, float]) -> None:
-        kp = 0.8
-        max_speed = 0.35
-        min_speed = 0.05
-        goal_tolerance = 0.03
-        
-        rel_x, rel_y, yaw = self._bridge.get_pose(relative=True)
-        dx = target[0] - rel_x
-        dy = target[1] - rel_y
-        distance = math.hypot(dx, dy)
-
-        if distance <= goal_tolerance:
-            self._bridge.send_velocity(0.0, 0.0)
-            with self._lock:
-                self._target = None
-                self._cancel_requested = False
-            self._notify_cb("move@done")
-            return
-
-        target_yaw = math.atan2(dy, dx)
-        yaw_error = normalize_angle(target_yaw - yaw)
-
-        linear_speed = 0.0
-        angular_speed = 0.0
-
-        if abs(yaw_error) > YAW_TOLERANCE:
-            angular_speed = ANGULAR_KP * yaw_error
-            angular_speed = max(min(angular_speed, MAX_ANGULAR_SPEED), -MAX_ANGULAR_SPEED)
-        else:
-            linear_speed = kp * distance
-            linear_speed = max(min(linear_speed, max_speed), min_speed)
-
-        self._bridge.send_velocity(linear_speed, angular_speed)
-
-    def _line_tracer_step(self) -> None:
-        # This function combines the logic from LineTracerRemote
-        raw_left, raw_right = self._bridge.get_line_sensor()
-
-        with self._lock:
-            if not self._line_tracing_active:
-                return # State changed by another thread
-
-            if self._lt_calibration_active:
-                # Check for calibration success
-                if raw_left == 1 and raw_right == 1:
-                    print("[모션] 센서 [1,1] 감지 → 라인 추적 준비 완료.")
-                    self._lt_calibration_active = False
-                    self._lt_tracking_started = False
-                    self._bridge.send_velocity(0.0, 0.0)
-                    print("[모션] 라인 추적 준비 단계가 종료되었습니다. 라인 트레이싱을 시작합니다.")
-                    return
-
-                # Perform calibration rotation
-                now = self._bridge.get_time()
-                delta = now - self._lt_last_calibration_time
-                self._lt_last_calibration_time = now
-                self._lt_calibration_remaining -= abs(self._lt_scan_angular_speed) * delta
-                
-                angular_z = self._lt_calibration_direction * self._lt_scan_angular_speed
-                self._bridge.send_velocity(0.0, angular_z)
-
-                if self._lt_calibration_remaining <= 0.0:
-                    if self._lt_calibration_direction > 0:
-                        self._lt_calibration_direction = -1.0
-                        self._lt_calibration_remaining = self._lt_right_sweep_angle
-                        print("[모션] 라인 추적 준비: 오른쪽으로 회전")
-                    else:
-                        self._lt_calibration_direction = 1.0
-                        self._lt_calibration_remaining = self._lt_left_sweep_angle
-                        print("[모션] 라인 추적 준비: 왼쪽으로 회전")
-                return
-
-            # --- Line Tracking Logic ---
-            left_on_line = raw_left == 1
-            right_on_line = raw_right == 1
-            linear_x, angular_z = 0.0, 0.0
-
-            if left_on_line and right_on_line:
-                linear_x = self._lt_linear_speed
-                angular_z = 0.0
-                if not self._lt_tracking_started:
-                    print("[모션] 라인 추적 시작됨.")
-                    self._lt_tracking_started = True
-            elif left_on_line and not right_on_line:
-                angular_z = self._lt_angular_speed
-            elif right_on_line and not left_on_line:
-                angular_z = -self._lt_angular_speed
-            else: # Both sensors off the line
-                if self._lt_tracking_started:
-                    # Lost the line, stop and notify server
-                    self._bridge.send_velocity(0.0, 0.0)
-                    print("[모션] 센서 [0,0] 감지 → 라인 추적 완료.")
-                    self._line_tracing_active = False
-                    self._lt_tracking_started = False
-                    self._notify_cb("trace@done")
-                    return
-                else:
-                    # Still in initial search, do nothing until calibration finds the line
-                    angular_z = self._lt_scan_angular_speed * self._lt_calibration_direction
-
-            self._bridge.send_velocity(linear_x, angular_z)
-
-
 def configure_capture() -> Tuple[cv2.VideoCapture, float]:
     """카메라를 빠르게 초기화하고 센서 FPS를 반환."""
     cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
@@ -549,16 +431,13 @@ def authenticate(sock: socket.socket) -> bool:
     return False
 
 def handle_server_message(line: str, motion: Optional[MotionController]) -> None:
-    if not line or motion is None:
+    if not line:
         return
-    
     upper = line.strip().upper()
-    
-    if upper == "TRACE_LINE":
-        print(f"TRACE_LINE 명령 수신")
-        motion.start_line_tracing()
-    elif line.startswith("MOVE:"):
+    if line.startswith("MOVE:"):
         print(f"MOVE 명령 수신: {line}")
+        if motion is None:
+            return
         try:
             _, payload = line.split(":", 1)
             start_raw, target_raw = payload.split("->", 1)
@@ -570,8 +449,11 @@ def handle_server_message(line: str, motion: Optional[MotionController]) -> None
             print(f"MOVE 명령 파싱 실패: {line}")
     elif upper == "STOP":
         print("STOP 명령 수신: 즉시 정지합니다.")
-        motion.cancel()
+        if motion is not None:
+            motion.cancel()
     elif line.startswith("TURN:"):
+        if motion is None:
+            return
         try:
             _, payload = line.split(":", 1)
             parts = [p.strip() for p in payload.split(",") if p.strip()]
