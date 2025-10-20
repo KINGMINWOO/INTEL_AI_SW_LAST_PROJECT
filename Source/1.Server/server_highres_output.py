@@ -913,12 +913,26 @@ def handle_user_client(conn, addr, client_id, prefetched_data=b""):
             print(f"[{client_id}] 수신: {message}")
             if message.startswith("[") and "]" in message:
                 bracket_end = message.find("]")
-                target_label = message[1:bracket_end].strip()
-                payload = message
-                target_key = target_label.upper()
-                if target_key.startswith("CCTV"):
+                target_label = message[1:bracket_end].strip().upper()
+                if target_label.startswith("TURTLE"):
+                    payload = message[bracket_end + 1:].strip()
                     with control_lock:
-                        target_conn = cctv_clients.get(target_key)
+                        target_conn = robot_clients.get(target_label)
+                    if not target_conn:
+                        conn.sendall(b"ERROR:TARGET_NOT_FOUND\n")
+                        continue
+                    try:
+                        target_conn.sendall((payload + "\n").encode("utf-8"))
+                        conn.sendall(b"CMD_OK\n")
+                        print(f"INFO: Forwarded '{payload}' from {client_id} to {target_label}")
+                    except OSError as exc:
+                        print(f"ERROR: {client_id} -> {target_label} 메시지 전달 실패: {exc}")
+                        conn.sendall(b"ERROR:FORWARD_FAILED\n")
+                    continue
+                elif target_label.startswith("CCTV"):
+                    payload = message
+                    with control_lock:
+                        target_conn = cctv_clients.get(target_label)
                     if not target_conn:
                         conn.sendall(b"ERROR:TARGET_NOT_FOUND\n")
                         continue
@@ -926,7 +940,7 @@ def handle_user_client(conn, addr, client_id, prefetched_data=b""):
                         target_conn.sendall((payload.rstrip("\r\n") + "\n").encode("utf-8"))
                         conn.sendall(b"CMD_OK\n")
                     except OSError as exc:
-                        print(f"{client_id} -> {target_key} 메시지 전달 실패: {exc}")
+                        print(f"{client_id} -> {target_label} 메시지 전달 실패: {exc}")
                         conn.sendall(b"ERROR:FORWARD_FAILED\n")
                     continue
             command = message.lower()
