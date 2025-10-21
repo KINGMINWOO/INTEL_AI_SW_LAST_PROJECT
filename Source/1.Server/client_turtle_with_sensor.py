@@ -33,7 +33,7 @@ try:
 except ImportError:
     serial = None
 
-# --- Constants ---
+# --- 설정 상수 ---
 AUTH_PROMPT = "AUTH_REQUEST"
 AUTH_OK = "AUTH_OK"
 CLIENT_ID = "TURTLE01"
@@ -54,17 +54,20 @@ SERIAL_BAUDRATE = 9600
 
 
 def quaternion_to_yaw(w: float, x: float, y: float, z: float) -> float:
+    """ROS 쿼터니언을 평면 yaw 각도로 변환한다."""
     siny_cosp = 2.0 * (w * z + x * y)
     cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
     return math.atan2(siny_cosp, cosy_cosp)
 
 def decode_fourcc(value: float) -> str:
+    """OpenCV FOURCC 값을 사람이 읽을 수 있는 문자열로 바꾼다."""
     code = int(value)
     chars = [chr((code >> (8 * i)) & 0xFF) for i in range(4)]
     result = "".join(chars)
     return result if result.strip("\x00") else "----"
 
 def try_set_fourcc(cap: cv2.VideoCapture, fourcc: str) -> bool:
+    """지원 포맷 후보를 시도하면서 카메라 FOURCC를 세팅한다."""
     code = cv2.VideoWriter_fourcc(*fourcc)
     if not cap.set(cv2.CAP_PROP_FOURCC, code):
         return False
@@ -72,6 +75,7 @@ def try_set_fourcc(cap: cv2.VideoCapture, fourcc: str) -> bool:
     return applied == fourcc
 
 def normalize_angle(angle: float) -> float:
+    """각도를 -pi~pi 범위로 정규화한다."""
     return (angle + math.pi) % (2 * math.pi) - math.pi
 
 class ArduinoBridge:
@@ -194,6 +198,7 @@ class OdometryBridge:
             return self.get_clock().now().nanoseconds / 1e9
 
     def start(self) -> bool:
+        """rclpy 노드를 초기화하고 오도메트리/센서 구독을 시작한다."""
         if rclpy is None:
             print("rclpy 패키지를 찾을 수 없어 ROS2 기능을 건너뜁니다.")
             return False
@@ -217,6 +222,7 @@ class OdometryBridge:
             return False
 
     def _spin(self) -> None:
+        """별도 스레드에서 rclpy 이벤트 루프를 돌린다."""
         try:
             while self._running and rclpy.ok():
                 rclpy.spin_once(self._node, timeout_sec=0.1)
@@ -234,6 +240,7 @@ class OdometryBridge:
             self._running = False
 
     def stop(self) -> None:
+        """ROS2 브리지 스레드와 노드를 안전하게 종료한다."""
         if not self._running: return
         self._running = False
         if self._thread and self._thread.is_alive():
@@ -241,12 +248,14 @@ class OdometryBridge:
         self._thread = None
 
     def _set_pose(self, x: float, y: float, yaw: float) -> None:
+        """오도메트리 최신값을 저장한다."""
         with self._lock:
             if self._origin is None: self._origin = (x, y)
             self._latest_pose = (x, y, yaw)
             self._has_pose = True
     
     def _set_line_sensor(self, sensor_data: Tuple[int, int]) -> None:
+        """라인 센서 값을 갱신한다."""
         with self._lock:
             self._latest_sensor = sensor_data
 
@@ -315,6 +324,7 @@ class MotionController:
         self._thread.start()
 
     def move_to(self, target: Tuple[float, float]) -> None:
+        """상대 좌표 목표까지 이동하는 Nav2 대체 로직."""
         if not self._bridge.start(): return
         with self._lock:
             self._target = target
@@ -324,6 +334,7 @@ class MotionController:
         print(f"[모션] 목표 좌표 rel({target[0]:.2f}, {target[1]:.2f}) 이동 시작")
 
     def set_manual_velocity(self, linear: float, angular: float) -> None:
+        """사용자 지정 선속도/각속도로 직접 제어한다."""
         if not self._bridge.start(): return
         with self._lock:
             self._target = None
@@ -335,6 +346,7 @@ class MotionController:
         if not self._manual_active: self._bridge.send_velocity(0.0, 0.0)
 
     def start_line_tracing(self) -> None:
+        """라인 센서 기반 자동 주행을 시작한다."""
         if not self._bridge.start(): return
         print("[모션] 라인 추적 시작")
         with self._lock:
@@ -350,6 +362,7 @@ class MotionController:
         print("[모션] 라인 추적 준비: 센서 [1,1]을 찾기 위해 좌/우 회전을 시작합니다.")
 
     def cancel(self) -> None:
+        """현재 진행 중인 모든 동작을 중단하고 서버에 알린다."""
         with self._lock:
             if self._target is None and not self._manual_active and not self._line_tracing_active: return
             self._target = None
@@ -361,11 +374,13 @@ class MotionController:
         print("[모션] 모든 이동 취소 및 정지")
 
     def stop(self) -> None:
+        """컨트롤러 스레드를 종료한다."""
         self._running = False
         self.cancel()
         self._thread.join(timeout=1.0)
 
     def _loop(self) -> None:
+        """제어 스레드 메인 루프."""
         while self._running:
             with self._lock:
                 is_line_tracing = self._line_tracing_active
@@ -387,6 +402,7 @@ class MotionController:
             time.sleep(0.05)
 
     def _move_to_step(self, target: Tuple[float, float]) -> None:
+        """목표점을 향해 P 제어로 이동한다."""
         kp = 0.8
         max_speed, min_speed, goal_tolerance = 0.35, 0.05, 0.03
         rel_x, rel_y, yaw = self._bridge.get_pose(relative=True)
@@ -409,6 +425,7 @@ class MotionController:
         self._bridge.send_velocity(linear_speed, angular_speed)
 
     def _line_tracer_step(self) -> None:
+        """라인 센서 패턴에 따라 속도를 조절한다."""
         raw_left, raw_right = self._bridge.get_line_sensor()
         with self._lock:
             if not self._line_tracing_active: return
@@ -458,6 +475,7 @@ class MotionController:
             self._bridge.send_velocity(linear_x, angular_z)
 
 def configure_capture() -> Optional[Tuple[cv2.VideoCapture, float]]:
+    """카메라 장치를 열고 해상도·FPS·FOURCC를 맞춘다."""
     try:
         cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
         if not cap.isOpened(): raise RuntimeError("카메라를 열 수 없습니다.")
@@ -480,6 +498,7 @@ def configure_capture() -> Optional[Tuple[cv2.VideoCapture, float]]:
         return None
 
 def _recv_line(sock: socket.socket) -> Optional[str]:
+    """서버로부터 개행 단위 문자열을 수신한다."""
     data = bytearray()
     while b"\n" not in data:
         chunk = sock.recv(1024)
@@ -490,11 +509,13 @@ def _recv_line(sock: socket.socket) -> Optional[str]:
     except UnicodeDecodeError: return None
 
 def authenticate(sock: socket.socket) -> bool:
+    """서버와 인증 핸드셰이크를 수행한다."""
     if _recv_line(sock) != AUTH_PROMPT: return False
     sock.sendall(f"{CLIENT_ID}:{CLIENT_PASSWORD}\n".encode("utf-8"))
     return _recv_line(sock) == AUTH_OK
 
 def handle_server_message(line: str, motion: MotionController, arduino: ArduinoBridge) -> None:
+    """서버에서 오는 제어 명령을 해석해 모션/아두이노 브리지에 전달한다."""
     if not line: return
     if line.startswith(("robot@", "dump@start")):
         arduino.write(line)
@@ -520,6 +541,7 @@ def handle_server_message(line: str, motion: MotionController, arduino: ArduinoB
     else: print(f"서버 메시지: {line}")
 
 def receive_async(sock: socket.socket, motion: MotionController, arduino: ArduinoBridge) -> None:
+    """소켓 수신 스레드: 줄 단위 명령을 읽어 콜백으로 넘긴다."""
     buffer = bytearray()
     while True:
         try:
@@ -534,6 +556,7 @@ def receive_async(sock: socket.socket, motion: MotionController, arduino: Arduin
         except OSError: print("메시지 수신 스레드 오류."); break
 
 def send_control_message(sock: socket.socket, message: str) -> None:
+    """영상 스트림과 동일한 채널로 제어 메시지를 보낸다."""
     if not message.strip(): return
     payload = (message.strip() + "\n").encode("utf-8")
     header = struct.pack(">L", 0)
@@ -544,6 +567,7 @@ def send_control_message(sock: socket.socket, message: str) -> None:
         print(f"제어 메시지 전송 실패: {exc}")
 
 def main() -> None:
+    """TurtleBot 클라이언트를 초기화하고 영상·센서 스트림을 전송한다."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)

@@ -1,4 +1,8 @@
-# server_highres_output.py (컴퓨터에서 실행)
+"""고해상도 영상·로봇 제어 서버 진입점.
+- 다중 클라이언트 인증과 MJPEG 스트림 수신
+- YOLOv8 감지 결과 기반의 자동 정지 및 Nav2 연동
+- Flask를 통한 실시간 비디오 제공
+"""
 import math
 import os
 import socket
@@ -29,7 +33,7 @@ except Exception as farm_storage_import_error:
     FarmDataLogger = None
     print(f"농가 데이터 로거를 불러오지 못했습니다: {farm_storage_import_error}")
 
-# --- Global Constants and Configuration ---
+# --- 전역 상수 및 기본 구성 ---
 DETECTION_WINDOW_SECONDS = 2.0
 DETECTION_COUNT_THRESHOLD = 2
 ABS_CENTER_THRESHOLD = 0.37
@@ -37,6 +41,7 @@ AUTO_STOP_TARGET_X = 1.0
 POSE_LOG_INTERVAL_SECONDS = 5.0
 YAW_ALIGNMENT_THRESHOLD = 0.01
 
+# 특정 명령어가 어떤 제어 루틴으로 연결되는지 정의한 매핑
 COMMAND_SPECS: dict[str, dict[str, Optional[float] | tuple[float, float] | str]] = {
     "ripe@go": {"mode": "line_trace"},
     "ripe@done": {"mode": "nav2", "target": (1.817, 0.8), "yaw": -2.8},
@@ -51,6 +56,7 @@ COMMAND_SPECS: dict[str, dict[str, Optional[float] | tuple[float, float] | str]]
     "dump2@done": {"mode": "nav2", "target": (0.0, -0.05), "yaw": 0.0},
 }
 
+# TurtleBot 자동 동선 실행을 위한 명령 시퀀스 템플릿
 NAV2_QUEUE_TEMPLATES: dict[str, list[str]] = {
     "turtle@go": [
         "ripe@go", "check1@point", "ripe@done", "dump1@done",
@@ -59,7 +65,7 @@ NAV2_QUEUE_TEMPLATES: dict[str, list[str]] = {
     "turtle2@go": ["rotten@go", "rotten@done", "dump2@done"]
 }
 
-# --- Global State Variables ---
+# --- 전역 상태 변수 ---
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 model = YOLO('best.pt').to(device)
 model_lock = threading.Lock()
@@ -98,24 +104,28 @@ if FarmDataLogger:
         print("경고: FARM_DB_URL이 설정되지 않았거나 기본 비밀번호가 그대로입니다.")
     farm_logger = FarmDataLogger(farm_db_url)
 else:
+    # DB 연결이 실패하면 farm_logger는 None으로 남고, 이후 로직에서 콘솔 로깅만 수행한다.
     farm_logger = None
 
 # --- Main Logic ---
 
 def main():
-    """Initializes and runs the server components."""
+    """소켓 서버와 Flask 스트리머를 함께 기동한다."""
     global nav2_bridge
     if nav2_bridge is None and create_nav2_bridge is not None:
         try:
+            # Nav2 액션 서버가 준비된 환경이라면 브리지 객체를 초기화한다.
             nav2_bridge = create_nav2_bridge()
             print("Nav2 브리지를 초기화했습니다.")
         except Exception as exc:
             print(f"Nav2 브리지 초기화 실패: {exc}")
 
+    # 영상 수신용 TCP 소켓 서버를 별도 스레드에서 수행한다.
     socket_thread = threading.Thread(target=start_socket_server)
     socket_thread.daemon = True
     socket_thread.start()
 
+    # 주기적으로 포즈 로그를 확인해 Nav2 정렬 루틴이 참조할 수 있도록 한다.
     pose_thread = threading.Thread(target=pose_debug_worker, daemon=True)
     pose_thread.daemon = True
     pose_thread.start()
@@ -125,18 +135,21 @@ def main():
 
 
 def _parse_float(token: str) -> Optional[float]:
+    """문자열을 실수로 변환한다. 실패 시 None."""
     try:
         return float(token)
     except (TypeError, ValueError):
         return None
 
 def _parse_int(token: str) -> Optional[int]:
+    """문자열을 정수로 변환한다. 실패 시 None."""
     try:
         return int(float(token))
     except (TypeError, ValueError):
         return None
 
 def try_handle_sensor_payload(source_id: str, payload: str) -> bool:
+    """센서 문자열을 파싱해 DB 로거로 전달하거나 로컬 로그만 남긴다."""
     if not payload:
         return False
     tokens = [segment.strip() for segment in payload.split("@")]
@@ -176,9 +189,11 @@ def try_handle_sensor_payload(source_id: str, payload: str) -> bool:
     return False
 
 def normalize_angle(angle: float) -> float:
+    """각도를 -pi~pi 범위로 정규화한다."""
     return (angle + math.pi) % (2 * math.pi) - math.pi
 
 def cancel_nav2_navigation(robot_id: Optional[str] = None, wait: bool = True) -> bool:
+    """진행 중인 Nav2 목표를 취소하고 상태 딕셔너리를 정리한다."""
     global nav2_motion_thread, nav2_active_robot
     cancelled = False
     target_robot = robot_id.upper() if robot_id else nav2_active_robot
@@ -218,6 +233,7 @@ def cancel_nav2_navigation(robot_id: Optional[str] = None, wait: bool = True) ->
     return cancelled
 
 def schedule_next_nav2(robot_id: str) -> None:
+    """로봇별 Nav2 큐에서 다음 목표를 꺼내 실행한다."""
     upper_id = robot_id.upper()
     next_step = None
     with control_lock:
@@ -234,6 +250,7 @@ def schedule_next_nav2(robot_id: str) -> None:
             print(f"{upper_id} 큐 명령 실행 실패: {reason}")
 
 def start_sequence_by_name(robot_id: str, sequence_name: str) -> bool:
+    """사전에 정의된 Nav2 템플릿 시퀀스를 큐에 적재한다."""
     upper_id = robot_id.upper()
     if sequence_name not in NAV2_QUEUE_TEMPLATES:
         print(f"ERROR: 시퀀스 템플릿 '{sequence_name}'을(를) 찾을 수 없습니다.")
@@ -250,6 +267,7 @@ def start_sequence_by_name(robot_id: str, sequence_name: str) -> bool:
     return True
 
 def enqueue_nav2_sequence(robot_id: str, sequence: list[tuple[str, tuple[float, float], Optional[float], str]]) -> None:
+    """Nav2 시퀀스를 상태에 저장하고 즉시 다음 목표를 예약한다."""
     upper_id = robot_id.upper()
     with control_lock:
         state = robot_states.setdefault(upper_id, {})
@@ -264,6 +282,7 @@ def enqueue_nav2_sequence(robot_id: str, sequence: list[tuple[str, tuple[float, 
     schedule_next_nav2(upper_id)
 
 def start_nav2_navigation(robot_id: str, target_point: tuple[float, float], label: Optional[str], yaw: Optional[float]) -> tuple[bool, str]:
+    """Nav2 행동을 비동기 스레드에서 실행하고 결과에 따라 후속 동작을 트리거한다."""
     global nav2_motion_thread, nav2_active_robot
     if nav2_bridge is None or Nav2Result is None:
         return False, "NAV2_UNAVAILABLE"
@@ -324,6 +343,7 @@ def start_nav2_navigation(robot_id: str, target_point: tuple[float, float], labe
     return True, "NAV2_STARTED"
 
 def send_custom_command(target_id: str, command: str) -> bool:
+    """특정 로봇 소켓에 커스텀 문자열 명령을 전송한다."""
     upper_id = target_id.upper()
     with control_lock:
         target_conn = robot_clients.get(upper_id)
@@ -340,6 +360,7 @@ def send_custom_command(target_id: str, command: str) -> bool:
         return False
 
 def send_stop_to_robot(target_id: str) -> None:
+    """STOP 명령과 정지용 TURN 명령을 보내 Nav2/라인트레이서를 중단한다."""
     upper_id = target_id.upper()
     with control_lock:
         target_conn = robot_clients.get(upper_id)
@@ -358,6 +379,7 @@ def send_stop_to_robot(target_id: str) -> None:
         print(f"{upper_id} STOP 명령 전송 실패: {exc}")
 
 def send_turn_command(target_id: str, linear: float, angular: float) -> bool:
+    """로봇에 선속도·각속도를 직접 지정하는 TURN 메시지를 보낸다."""
     upper_id = target_id.upper()
     with control_lock:
         target_conn = robot_clients.get(upper_id)
@@ -377,6 +399,7 @@ ALIGN_THREAD_SLEEP = 0.1
 ALIGN_POSE_TIMEOUT = 1.0
 
 def start_alignment_control(robot_id: str, target_yaw: float) -> None:
+    """덤프 존 정렬 등을 위해 목표 yaw 각도로 맞추는 보정 루틴."""
     upper_id = robot_id.upper()
     def _worker():
         try:
@@ -432,6 +455,7 @@ def start_alignment_control(robot_id: str, target_yaw: float) -> None:
         thread.start()
 
 def should_trigger_auto_stop(robot_id: str, category: str, x_center_norm: float) -> bool:
+    """감지 결과가 일정 구간에 반복되면 Nav2를 일시 정지하고 라인트레이서 재개 정보를 저장한다."""
     now = time.monotonic()
     upper_id = robot_id.upper()
     expected_label = f"{category}@go"
@@ -465,6 +489,7 @@ def should_trigger_auto_stop(robot_id: str, category: str, x_center_norm: float)
     return False
 
 def resume_nav2_for_robot(robot_id: str) -> bool:
+    """라인트레이서 종료 후 저장된 Nav2 목표를 복원한다."""
     upper_id = robot_id.upper()
     with control_lock:
         state = robot_states.get(upper_id)
@@ -531,6 +556,7 @@ def resume_nav2_for_robot(robot_id: str) -> bool:
     return success
 
 def complete_manual_move(robot_id: str) -> bool:
+    """수동 이동 혹은 라인트레이싱 종료 시 상태를 정리하고 다음 단계로 진행한다."""
     global nav2_active_robot
     upper_id = robot_id.upper()
     align_required = False
@@ -574,6 +600,7 @@ def complete_manual_move(robot_id: str) -> bool:
     return True
 
 def load_credentials():
+    """idlist.txt를 읽어 인증용 계정 사전을 생성한다."""
     credentials = {}
     try:
         with CREDENTIAL_FILE.open("r", encoding="utf-8") as cred_file:
@@ -591,6 +618,7 @@ def load_credentials():
     return credentials
 
 def _recv_until_newline(conn):
+    """개행이 나올 때까지 소켓에서 데이터를 수신하고, 남은 버퍼를 함께 반환한다."""
     buffer = b""
     while b"\n" not in buffer and len(buffer) < 4096:
         chunk = conn.recv(1024)
@@ -604,6 +632,7 @@ def _recv_until_newline(conn):
     return line, remainder
 
 def authenticate_client(conn, addr):
+    """클라이언트로부터 자격 증명을 받아 검증한다."""
     credentials = load_credentials()
     if not credentials:
         try:
@@ -649,6 +678,7 @@ def authenticate_client(conn, addr):
     return False, b"", None
 
 def trigger_and_handle_auto_stop(client_id: str, conn, y_center_norm: float):
+    """자동 정지 조건이 충족되면 Nav2를 취소하고 라인트레이서 명령으로 전환한다."""
     def _worker():
         upper_id = client_id.upper()
         print(f"INFO: {upper_id}에서 토마토를 감지하여 자동 정지 시퀀스를 시작합니다.")
@@ -674,6 +704,7 @@ def trigger_and_handle_auto_stop(client_id: str, conn, y_center_norm: float):
     thread.start()
 
 def handle_client(conn, addr, client_id, prefetched_data=b""):
+    """로봇·CCTV 클라이언트의 영상 프레임과 제어 메시지를 처리한다."""
     global output_frame, nav2_active_robot
     conf_threshold = 0.35
     print(f"클라이언트 {addr}가 연결되었습니다. (ID: {client_id})")
@@ -814,6 +845,7 @@ def handle_client(conn, addr, client_id, prefetched_data=b""):
     conn.close()
 
 def dispatch_move_command(target_id: str, command: Optional[str] = None, origin: tuple[float, float] = (0.0, 0.0), target: Optional[tuple[float, float]] = None, yaw: Optional[float] = None, mode: str = "nav2"):
+    """명령 유형에 따라 Nav2, TRACE_LINE, 수동 이동을 분기 처리한다."""
     global nav2_active_robot
     upper_id = target_id.upper()
     with control_lock:
@@ -892,6 +924,7 @@ def dispatch_move_command(target_id: str, command: Optional[str] = None, origin:
     return False, "UNKNOWN_MODE"
 
 def handle_user_client(conn, addr, client_id, prefetched_data=b""):
+    """사용자 텍스트 클라이언트 명령을 받아 Nav2/라인트레이서 요청으로 변환한다."""
     print(f"사용자 채널 {addr} 접속 (ID: {client_id})")
     suffix = client_id.upper()[4:] if len(client_id) >= 4 else ""
     target_id = f"TURTLE{suffix}" if suffix else None
@@ -985,6 +1018,7 @@ def handle_user_client(conn, addr, client_id, prefetched_data=b""):
         conn.close()
 
 def start_socket_server():
+    """스트리밍/제어 클라이언트를 수용하는 TCP 메인 루프."""
     global nav2_bridge
     if nav2_bridge is None and create_nav2_bridge is not None:
         try:
@@ -1011,6 +1045,7 @@ def start_socket_server():
         thread.start()
 
 def pose_debug_worker() -> None:
+    """주기적으로 로봇 포즈를 표준 출력으로 기록한다."""
     while True:
         time.sleep(POSE_LOG_INTERVAL_SECONDS)
         with control_lock:
@@ -1031,6 +1066,7 @@ app = Flask(__name__)
 
 @app.route("/video_feed/<client_id>")
 def video_feed(client_id):
+    """Flask 라우트: 클라이언트별 MJPEG 스트림을 반환한다."""
     return Response(generate_frames(client_id), mimetype="multipart/x-mixed-replace; boundary=frame")
 
 @app.route("/")
@@ -1040,6 +1076,7 @@ def index():
     return ("<h1>토마토 감지 가뵤자고~</h1><p>/video_feed/&lt;client_id&gt; 형식으로 접속하세요.</p>" + f"<p>현재 연결된 클라이언트: {active_clients}</p>")
 
 def generate_frames(client_id):
+    """공유 버퍼에서 프레임을 읽어 MJPEG 바이트 스트림을 만든다."""
     while True:
         with frames_lock:
             frame = client_frames.get(client_id)
