@@ -97,7 +97,7 @@ nav2_motion_thread: Optional[threading.Thread] = None
 nav2_active_robot: Optional[str] = None
 alignment_threads: dict[str, threading.Thread] = {}
 
-DEFAULT_FARM_DB_URL = "mysql+pymysql://user01:user1234@10.10.16.29:3306/smart_farm"
+DEFAULT_FARM_DB_URL = "mysql+pymysql://user01:user1234@192.168.0.4:3306/smart_farm"
 farm_db_url = os.getenv("FARM_DB_URL") or DEFAULT_FARM_DB_URL
 if FarmDataLogger:
     if "your_password" in farm_db_url:
@@ -677,7 +677,7 @@ def authenticate_client(conn, addr):
     print(f"접속 거부: {addr} 인증 실패 (ID: {user_id})")
     return False, b"", None
 
-def trigger_and_handle_auto_stop(client_id: str, conn, y_center_norm: float):
+def trigger_and_handle_auto_stop(client_id: str, conn, y_center_norm: float, category: str):
     """자동 정지 조건이 충족되면 Nav2를 취소하고 라인트레이서 명령으로 전환한다."""
     def _worker():
         upper_id = client_id.upper()
@@ -698,6 +698,11 @@ def trigger_and_handle_auto_stop(client_id: str, conn, y_center_norm: float):
         try:
             conn.sendall(payload)
             print(f"{client_id} 로봇팔 명령 전송: {arm_topic}")
+            if farm_logger:
+                ripe_count = 1 if category == "ripe" else 0
+                rotten_count = 1 if category == "rotten" else 0
+                farm_logger.log_tomato_snapshot(device_id=client_id, ripe_count=ripe_count, rotten_count=rotten_count)
+                print(f"INFO: {client_id} 토마토 스냅샷 저장: ripe={ripe_count}, rotten={rotten_count}")
         except socket.error as exc:
             print(f"{client_id} 로봇팔 명령 전송 실패: {exc}")
     thread = threading.Thread(target=_worker, daemon=True)
@@ -824,7 +829,7 @@ def handle_client(conn, addr, client_id, prefetched_data=b""):
                     if class_name in {"ripe", "rotten"}:
                         if should_trigger_auto_stop(upper_id, class_name, ((x1 + x2) / 2) / w_orig):
                             y_center_norm = ((y1 + y2) / 2) / h_orig
-                            trigger_and_handle_auto_stop(client_id, conn, y_center_norm)
+                            trigger_and_handle_auto_stop(client_id, conn, y_center_norm, class_name)
                     cv2.rectangle(rendered_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                     cv2.putText(rendered_frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5 * (w_orig / yolo_w), (0, 255, 0), 2)
             with lock:

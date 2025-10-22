@@ -17,7 +17,7 @@ CLIENT_ID = "CCTV01"
 CLIENT_PASSWORD = "CCTV1234"
 
 # --- TCP server config ---
-server_ip = '10.10.16.29'
+server_ip = '192.168.0.4'
 server_port = 9999
 
 # --- UART3 config (RPi4B) ---

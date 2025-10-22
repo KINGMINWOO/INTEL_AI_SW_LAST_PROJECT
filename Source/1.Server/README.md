@@ -40,7 +40,7 @@
    > CREATE USER 'user01'@'%' IDENTIFIED BY 'user1234';
    > GRANT ALL PRIVILEGES ON smart_farm.* TO 'user01'@'%';
    ```
-   - 서버 기본 연결 문자열은 `mysql+pymysql://user01:user1234@10.10.16.29:3306/smart_farm`입니다. 다른 계정을 사용하려면 `FARM_DB_URL` 환경 변수를 덮어쓰세요.
+   - 서버 기본 연결 문자열은 `mysql+pymysql://user01:user1234@192.168.0.4:3306/smart_farm`입니다. 다른 계정을 사용하려면 `FARM_DB_URL` 환경 변수를 덮어쓰세요.
 
 ## 3. 시뮬레이션 및 Nav2 구성
 시뮬레이터 없이 실제 TurtleBot과 연동할 수도 있으나, 개발/테스트 단계에서는 Gazebo + Nav2 환경을 사용하는 것이 안전합니다.
@@ -124,7 +124,7 @@ rviz2 -d /opt/ros/humble/share/turtlebot3_navigation2/rviz/turtlebot3_nav2.rviz
   - `farm_air_samples`: `air@...` 문자열에서 추출한 공기 온도·습도·공기질·조도.
   - `farm_land_samples`: `land@...` 문자열에서 추출한 토양 온도·습도·EC·pH.
   - `farm_tomato_snapshots`: CCTV 프레임 분석 결과를 저장할 때 사용(현재 기본 흐름에서는 미사용이지만 스키마는 자동 생성됨).
-- 기본 연결 문자열은 `mysql+pymysql://user01:user1234@10.10.16.29:3306/smart_farm`입니다. 다른 환경에서는 `FARM_DB_URL`로 덮어씌우세요.
+- 기본 연결 문자열은 `mysql+pymysql://user01:user1234@192.168.0.4:3306/smart_farm`입니다. 다른 환경에서는 `FARM_DB_URL`로 덮어씌우세요.
 
 ### 6.1 데이터 확인 예시
 ```sql
@@ -139,7 +139,7 @@ SELECT * FROM farm_tomato_snapshots ORDER BY id DESC LIMIT 5;
 ### 6.2 추가 REST 수집기 (`farm_data_service.py`)
 - 외부 장치가 HTTP로 데이터 업로드해야 할 때만 사용합니다.
   ```bash
-  FARM_DB_URL='mysql+pymysql://user01:user1234@10.10.16.29:3306/smart_farm' \
+  FARM_DB_URL='mysql+pymysql://user01:user1234@192.168.0.4:3306/smart_farm' \
   python3 farm_data_service.py
   ```
 - JSON `{ "payload": "air@23.5@70.1@150@420" }` 또는 단순 텍스트 바디를 받아 위 테이블과 동일한 스키마로 저장합니다.
