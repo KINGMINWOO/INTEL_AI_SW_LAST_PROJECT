@@ -48,7 +48,7 @@ mysql -u root -p
 > CREATE USER 'user01'@'%' IDENTIFIED BY 'user1234';
 > GRANT ALL PRIVILEGES ON smart_farm.* TO 'user01'@'%';
 ```
-- 기본 연결 문자열은 `mysql+pymysql://user01:user1234@10.10.16.29:3306/smart_farm`.
+- 기본 연결 문자열은 `mysql+pymysql://user01:user1234@192.168.0.4:3306/smart_farm`.
 - 다른 환경에서는 `FARM_DB_URL` 환경 변수를 사용하거나 `server.py`의 기본값을 수정하세요.
 
 ### 2.4 하드웨어 의존 패키지
@@ -138,7 +138,7 @@ mysql -u root -p
 - 지표 이름은 `farm_metrics.json`에서 동적으로 로드하며, 파일이 없으면 기본 필드(`temperature_c`, `humidity_pct`, ...)를 사용합니다.
 - 예시:
   ```bash
-  FARM_DB_URL='mysql+pymysql://user01:user1234@10.10.16.29:3306/smart_farm' \
+  FARM_DB_URL='mysql+pymysql://user01:user1234@192.168.0.4:3306/smart_farm' \
     python3 farm_data_service.py
   ```
   `curl -X POST http://localhost:8081/api/farm-data -H "Content-Type: application/json" -d '{"payload":"cctv01@24.1@70.3@120@350"}'`
@@ -170,7 +170,7 @@ mysql -u root -p
   - `farm_land_samples`: `land@` 페이로드에서 토양 온도, 습도, EC, pH를 저장.
   - `farm_tomato_snapshots`: `turtle@go` 실행 전 CCTV 스냅샷의 익은/썩은 토마토 개수를 기록.
 - `farm_data_service.py`는 `farm_samples` 테이블을 사용하며, metric 이름은 `farm_metrics.json`으로 관리할 수 있습니다.
-- 기본 접속 문자열은 `mysql+pymysql://user01:user1234@10.10.16.29:3306/smart_farm`이며, 환경 변수 `FARM_DB_URL`로 재정의 가능합니다.
+- 기본 접속 문자열은 `mysql+pymysql://user01:user1234@192.168.0.4:3306/smart_farm`이며, 환경 변수 `FARM_DB_URL`로 재정의 가능합니다.
 
 ### 7.1 데이터 확인 예시
 ```sql
