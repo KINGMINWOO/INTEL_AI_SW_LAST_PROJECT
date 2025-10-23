@@ -49,6 +49,8 @@ extern "C" {
 
 /* USER CODE END EM */
 
+void HAL_TIM_MspPostInit(TIM_HandleTypeDef *htim);
+
 /* Exported functions prototypes ---------------------------------------------*/
 void Error_Handler(void);
 
@@ -59,16 +61,35 @@ void Error_Handler(void);
 /* Private defines -----------------------------------------------------------*/
 #define B1_Pin GPIO_PIN_13
 #define B1_GPIO_Port GPIOC
+#define B1_EXTI_IRQn EXTI15_10_IRQn
+#define CdS_Pin GPIO_PIN_0
+#define CdS_GPIO_Port GPIOA
+#define GAS_Pin GPIO_PIN_1
+#define GAS_GPIO_Port GPIOA
 #define USART_TX_Pin GPIO_PIN_2
 #define USART_TX_GPIO_Port GPIOA
 #define USART_RX_Pin GPIO_PIN_3
 #define USART_RX_GPIO_Port GPIOA
 #define LD2_Pin GPIO_PIN_5
 #define LD2_GPIO_Port GPIOA
+#define HUMIDIFIER_Pin GPIO_PIN_10
+#define HUMIDIFIER_GPIO_Port GPIOB
+#define NUTRIENTS_Pin GPIO_PIN_12
+#define NUTRIENTS_GPIO_Port GPIOB
+#define WATER_Pin GPIO_PIN_13
+#define WATER_GPIO_Port GPIOB
+#define AC_Pin GPIO_PIN_14
+#define AC_GPIO_Port GPIOB
+#define FAN_Pin GPIO_PIN_15
+#define FAN_GPIO_Port GPIOB
+#define PLANT_LED_Pin GPIO_PIN_11
+#define PLANT_LED_GPIO_Port GPIOA
 #define TMS_Pin GPIO_PIN_13
 #define TMS_GPIO_Port GPIOA
 #define TCK_Pin GPIO_PIN_14
 #define TCK_GPIO_Port GPIOA
+#define DHT_Pin GPIO_PIN_10
+#define DHT_GPIO_Port GPIOC
 #define SWO_Pin GPIO_PIN_3
 #define SWO_GPIO_Port GPIOB
 
