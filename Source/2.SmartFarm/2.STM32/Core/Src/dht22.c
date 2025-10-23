@@ -1,6 +1,8 @@
 #include "dht22.h"
 #include <string.h>
 
+float air_temp, air_humi;
+
 /* ====================== DWT 기반 마이크로초 지연 ====================== */
 uint32_t DWT_Delay_Init(void)
 {
@@ -164,6 +166,8 @@ void DHT22_ReadPeriodic(void)
   last_ms = now;
 
   DHT22_TypeDef d = DHT22_ReadData();
+  air_temp = d.temperature;
+  air_humi = d.humidity;
   if (d.status == 1) {
      //필요 시 printf로 출력
      printf("<실내 온습도> 온도=%.1f C  습도=%.1f %%RH\r\n", d.temperature, d.humidity);

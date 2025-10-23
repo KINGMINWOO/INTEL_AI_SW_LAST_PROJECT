@@ -36,7 +36,7 @@
 /* USER CODE BEGIN PD */
 #define RX_BUF_SIZE 256 // 명령어를 받아오는 버퍼의 최대 크기
 #define ARR_CNT 6 // 명령어 인자의 최대 갯수
-#define CMD_SIZE 50 // 명령어의 최대 길이
+#define CMD_SIZE 100 // 명령어의 최대 길이
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -69,7 +69,8 @@ char rxBuf[RX_BUF_SIZE]; // 라즈베리파이에서 명령어를 받을 버퍼
 volatile uint8_t rx_ch; // 명령어를 한바이트씩 불러올 때 저장할 char 변수
 volatile uint8_t rx_idx = 0; // 명령어 버퍼의 요소의 index
 volatile uint8_t line_received = 0; // 명령어를 모두 받아왔을 때를 알려주는 플래그 변수
-/* ============ 조도, 가스 변수 ============= */
+/* ============ 실내 온습도 조도, 가스 변수 ============= */
+extern float air_temp, air_humi;
 volatile uint16_t ADC1xConvertValue[2] = {0}; // 0: 조도, 1: 공기질
 volatile int adcFlag = 0;
 /* ============ 자동 동작 임계값 조절 변수 ============= */
@@ -164,7 +165,15 @@ void MX_GPIO_PLANT_LED_OFF(int pin)
 {
 	HAL_GPIO_WritePin(PLANT_LED_GPIO_Port, pin, GPIO_PIN_RESET);
 }
-/* =======================================온도, 습도, EC, PH 값 읽어오기============================================== */
+void MX_GPIO_HUMIDIFIER_ON(int pin)
+{
+	HAL_GPIO_WritePin(HUMIDIFIER_GPIO_Port, pin, GPIO_PIN_SET);
+}
+void MX_GPIO_HUMIDIFIER_OFF(int pin)
+{
+	HAL_GPIO_WritePin(HUMIDIFIER_GPIO_Port, pin, GPIO_PIN_RESET);
+}
+/* =======================================[토양]온도, 습도, EC, PH 값 읽어오기============================================== */
 static void ReadTempHumECPH()
 {
 	uint8_t tx_data[8] = {0x01, 0x03, 0x00, 0x00, 0x00, 0x07, 0x04, 0x08};
@@ -195,13 +204,13 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)		//1ms 마다 호출
         // 논블로킹 펌프 타이머 처리: 1ms 단위
         if (g_water_ms_left > 0) {
             if (--g_water_ms_left == 0) {
-                MX_GPIO_WATER_OFF(WATER_Pin);   // 2초 만료 → 펌프 OFF
+                MX_GPIO_WATER_OFF(WATER_Pin);   // 5초 만료 → 펌프 OFF
                 printf("[WATER] OFF\r\n");
             }
         }
         if (g_nutr_ms_left > 0) {
             if (--g_nutr_ms_left == 0) {
-                MX_GPIO_NUTRIENTS_OFF(NUTRIENTS_Pin); // 1초 만료 → 영양제 OFF
+                MX_GPIO_NUTRIENTS_OFF(NUTRIENTS_Pin); // 2초 만료 → 영양제 OFF
                 printf("[NUTRIENTS] OFF\r\n");
             }
         }
@@ -369,6 +378,21 @@ __attribute__((weak)) void UART6_OnCommand(const char* line_in)
     		airQuality = atoi(pArray[2]);
     		printf("실내 공기질 조정: %d\r\n", airQuality);
     	}
+    	if(!strcmp(pArray[1], "ON"))
+    	{
+    		MX_GPIO_AC_ON(AC_Pin);   // AC 켬
+    		MX_GPIO_FAN_ON(FAN_Pin);	// FAN 켬
+    		MX_GPIO_HUMIDIFIER_ON(HUMIDIFIER_Pin); // HUMIDIFIER 켬
+			printf("AC, FAN ON\r\n");
+    	}
+    	else if(!strcmp(pArray[1], "OFF"))
+    	{
+    		MX_GPIO_AC_OFF(AC_Pin);   // AC 끔
+    		MX_GPIO_FAN_OFF(FAN_Pin);	// FAN 끔
+    		MX_GPIO_HUMIDIFIER_OFF(HUMIDIFIER_Pin); // HUMIDIFIER 끔
+			printf("AC, FAN OFF\r\n");
+    	}
+
     }
     else if(!strcmp(pArray[0], "LAND")) // 토양 환경 임계 값 변경
     {
@@ -386,6 +410,18 @@ __attribute__((weak)) void UART6_OnCommand(const char* line_in)
     	{
     		landEC = atoi(pArray[2]);
     		printf("토양 EC 조정: %d\r\n", landEC);
+    	}
+    	if(!strcmp(pArray[1], "ON"))
+    	{
+    		MX_GPIO_WATER_ON(WATER_Pin);   // WATER 켬
+    		MX_GPIO_NUTRIENTS_ON(NUTRIENTS_Pin);	// NUTRIENTS 켬
+			printf("WATER, NUTRIENTS ON\r\n");
+    	}
+    	else if(!strcmp(pArray[1], "OFF"))
+    	{
+    		MX_GPIO_WATER_OFF(WATER_Pin);   // WATER 끔
+    		MX_GPIO_NUTRIENTS_OFF(NUTRIENTS_Pin);	// NUTRIENTS 끔
+			printf("WATER, NUTRIENTS OFF\r\n");
     	}
     }
     else
@@ -429,7 +465,7 @@ void ADC_HandleLine(void)
 }
 
 /* =======================================물 주기 함수============================================= */
-void WaterPump5Sec(void)
+void WaterPump10Sec(void)
 {
     // 이미 동작 중이면 재시작하지 않고 무시
     if (g_water_ms_left > 0) {
@@ -438,12 +474,12 @@ void WaterPump5Sec(void)
     }
 
     MX_GPIO_WATER_ON(WATER_Pin);
-    g_water_ms_left = 5000;   // 5초
+    g_water_ms_left = 10000;   // 10초
     printf("[WATER] ON\r\n");
 }
 
 /* =======================================영양제 주기 함수============================================= */
-void NutrientsPump2Sec(void)
+void NutrientsPump5Sec(void)
 {
 	// 이미 동작 중이면 재시작하지 않고 무시
     if (g_nutr_ms_left > 0) {
@@ -452,7 +488,7 @@ void NutrientsPump2Sec(void)
     }
 
     MX_GPIO_NUTRIENTS_ON(NUTRIENTS_Pin);
-    g_nutr_ms_left = 2000;    // 2초
+    g_nutr_ms_left = 5000;    // 5초
     printf("[NUTRIENTS] ON\r\n");
 }
 
@@ -460,27 +496,30 @@ void NutrientsPump2Sec(void)
 void AutomaticAction(void)
 {
 	/*------------------------------------실내 공기----------------------------------------*/
-	DHT22_TypeDef d = DHT22_ReadData();
-	if(d.temperature > airTemp) // 실내 온도
+	if(air_temp > airTemp) // 실내 온도
 	{
 	  // AC 켬
 	  MX_GPIO_AC_ON(AC_Pin);
-	  printf("[AC] ON (임계 값: %.1f, 현재 값: %.1f)\r\n", airTemp, d.temperature);
+	  printf("[AC] ON (임계 값: %.1f, 현재 값: %.1f)\r\n", airTemp, air_temp);
 	}
 	else
 	{
 	  // AC 끔
 	  MX_GPIO_AC_OFF(AC_Pin);
-	  printf("[AC] OFF (임계 값: %.1f, 현재 값: %.1f)\r\n", airTemp, d.temperature);
+	  printf("[AC] OFF (임계 값: %.1f, 현재 값: %.1f)\r\n", airTemp, air_temp);
 	}
 
-	if(d.humidity < airHumi) // 실내 습도
+	if(air_humi < airHumi) // 실내 습도
 	{
 	  // 가습기 켬
+		MX_GPIO_HUMIDIFIER_ON(HUMIDIFIER_Pin);
+		printf("[HUMIDIFIER] ON (임계 값: %.1f, 현재 값: %.1f)\r\n", airHumi, air_humi);
 	}
 	else
 	{
 	  // 가습기 끔
+		MX_GPIO_HUMIDIFIER_OFF(HUMIDIFIER_Pin);
+		printf("[HUMIDIFIER] OFF (임계 값: %.1f, 현재 값: %.1f)\r\n", airHumi, air_humi);
 	}
 
 	if(ADC1xConvertValue[1] > airQuality) // 실내 공기질
@@ -499,14 +538,14 @@ void AutomaticAction(void)
 	/*------------------------------------토양----------------------------------------*/
 	if(humi < landHumi) // 토양 습도
 	{
-		// 물 주기(5초)
-		WaterPump5Sec();
+		// 물 주기(10초)
+		WaterPump10Sec();
 	}
 
 	if(ph > landPH || ec < landEC) // 토양 PH & EC
 	{
-		// 영양제 주기(2초)
-		NutrientsPump2Sec();
+		// 영양제 주기(5초)
+		NutrientsPump5Sec();
 	}
 }
 
@@ -515,18 +554,39 @@ void DB_UART6(void)
 {
     uint8_t sendBuf[CMD_SIZE] = {0};     // <-- char -> uint8_t
 
-    DHT22_TypeDef d = DHT22_ReadData();
     int n = snprintf((char*)sendBuf, sizeof(sendBuf),
                      "AIR@%.1f@%.1f@%d@%d\n",
-                     d.temperature, d.humidity, ADC1xConvertValue[0], ADC1xConvertValue[1]);
+                     air_temp, air_humi, ADC1xConvertValue[1], ADC1xConvertValue[0]); // AIR@온도@습도@공기질@조도
     if (n > 0) {
     	HAL_UART_Transmit(&huart6, sendBuf, (uint16_t)n, HAL_MAX_DELAY);
     	printf("%s\r\n", sendBuf);
     }
 
     n = snprintf((char*)sendBuf, sizeof(sendBuf),
-                 "LAND@%.1f@%.1f@%.1f@%d\n",
-                 temp, humi, ph, ec);
+                 "LAND@%.1f@%.1f@%d@%.1f\n",
+                 temp, humi, ec, ph); // LAND@온도@습도@ec@ph
+    if (n > 0) {
+    	HAL_UART_Transmit(&huart6, sendBuf, (uint16_t)n, HAL_MAX_DELAY);
+    	printf("%s\r\n", sendBuf);
+    }
+}
+
+/* =======================================10초마다 현재 환경 값을 디버깅하기위해 UART6로 보내는 함수============================================= */
+void Debuging_UART6(void)
+{
+    uint8_t sendBuf[CMD_SIZE] = {0};     // <-- char -> uint8_t
+
+    int n = snprintf((char*)sendBuf, sizeof(sendBuf),
+                     "현재 스마트팜 내부 환경 => AIR@%.1f@%.1f@%d@%d\n",
+                     air_temp, air_humi, ADC1xConvertValue[1], ADC1xConvertValue[0]); // AIR@온도@습도@공기질@조도
+    if (n > 0) {
+    	HAL_UART_Transmit(&huart6, sendBuf, (uint16_t)n, HAL_MAX_DELAY);
+    	printf("%s\r\n", sendBuf);
+    }
+
+    n = snprintf((char*)sendBuf, sizeof(sendBuf),
+                 "현재 토양 환경 => LAND@%.1f@%.1f@%d@%.1f\n",
+                 temp, humi, ec, ph); // LAND@온도@습도@ec@ph
     if (n > 0) {
     	HAL_UART_Transmit(&huart6, sendBuf, (uint16_t)n, HAL_MAX_DELAY);
     	printf("%s\r\n", sendBuf);
@@ -619,6 +679,8 @@ int main(void)
 		  {
 			  // (토양)온도, 습도, EC, PH값 읽고 출력
 			  ReadTempHumECPH();
+			  // 현재 공기, 토양 센서 값 디버깅(UART6)
+			  Debuging_UART6();
 		  }
 	  }
 
@@ -1047,7 +1109,8 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, NUTRIENTS_Pin|WATER_Pin|AC_Pin|FAN_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, HUMIDIFIER_Pin|NUTRIENTS_Pin|WATER_Pin|AC_Pin
+                          |FAN_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(DHT_GPIO_Port, DHT_Pin, GPIO_PIN_RESET);
@@ -1065,8 +1128,10 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : NUTRIENTS_Pin WATER_Pin AC_Pin FAN_Pin */
-  GPIO_InitStruct.Pin = NUTRIENTS_Pin|WATER_Pin|AC_Pin|FAN_Pin;
+  /*Configure GPIO pins : HUMIDIFIER_Pin NUTRIENTS_Pin WATER_Pin AC_Pin
+                           FAN_Pin */
+  GPIO_InitStruct.Pin = HUMIDIFIER_Pin|NUTRIENTS_Pin|WATER_Pin|AC_Pin
+                          |FAN_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;

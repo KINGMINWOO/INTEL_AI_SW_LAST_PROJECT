@@ -72,6 +72,8 @@ void Error_Handler(void);
 #define USART_RX_GPIO_Port GPIOA
 #define LD2_Pin GPIO_PIN_5
 #define LD2_GPIO_Port GPIOA
+#define HUMIDIFIER_Pin GPIO_PIN_10
+#define HUMIDIFIER_GPIO_Port GPIOB
 #define NUTRIENTS_Pin GPIO_PIN_12
 #define NUTRIENTS_GPIO_Port GPIOB
 #define WATER_Pin GPIO_PIN_13
