@@ -15,6 +15,7 @@
 #include <QDateTime>
 #include <QTimer>
 #include <QByteArray>
+#include <QMessageBox>
 
 // ──────────────────────────────
 // LED 라벨 텍스트
@@ -112,9 +113,9 @@ Tab2_set::~Tab2_set()
 // ===== 버튼 클릭 =====
 void Tab2_set::on_pPBAtemp_clicked()   { openSetting(ChangeSetting::Mode::Temp,     m_airTemp,   -20, 60); }
 void Tab2_set::on_pPBAhumi_clicked()   { openSetting(ChangeSetting::Mode::Humi,     m_airHumi,     0,100); }
-void Tab2_set::on_pPBair_clicked()     { openSetting(ChangeSetting::Mode::Air,      m_air,         0, 10); }
+void Tab2_set::on_pPBair_clicked()     { openSetting(ChangeSetting::Mode::Air,      m_air,         0, 100); }
 void Tab2_set::on_pPBShumi_clicked()   { openSetting(ChangeSetting::Mode::SoilHumi, m_soilHumi,    0,100); }
-void Tab2_set::on_pPBec_clicked()      { openSetting(ChangeSetting::Mode::EC,       m_ec,          0, 10); }
+void Tab2_set::on_pPBec_clicked()      { openSetting(ChangeSetting::Mode::EC,       m_ec,          0, 100); }
 void Tab2_set::on_pPBph_clicked()      { openSetting(ChangeSetting::Mode::PH,       m_ph,          0, 14); }
 void Tab2_set::on_pPBled_clicked()     { openSetting(ChangeSetting::Mode::LED,      m_ledLevel,    0,  3); }
 // TIME: 분 단위(0~1430), 30분 스냅은 ChangeSetting 내부 처리
@@ -262,6 +263,7 @@ void Tab2_set::onSettingDecided(ChangeSetting::Mode mode, int value)
             }
 
             emit sendToServer("[TURTLE01]turtle@go");
+            emit sendToServer("[CCTV01]LED@OFF");
             qDebug() << "[Tab2_set] NOW fired [TURTLE01]turtle@go";
 
             scheduleNextFire();
@@ -331,8 +333,31 @@ void Tab2_set::scheduleNextFire()
 void Tab2_set::onScheduledFire()
 {
     emit sendToServer("[TURTLE01]turtle@go");
+    emit sendToServer("[CCTV01]LED@OFF");
     qDebug() << "[Tab2_set] fired [TURTLE01]turtle@go";
 
     // 다음 날 같은 시각으로 다시 예약
     scheduleNextFire();
 }
+
+void Tab2_set::on_pPBquestion_clicked()
+{
+    QString htmlMsg = R"(
+    <p style="font-size:13px; line-height:1.5; font-family:'Segoe UI Emoji','Noto Color Emoji',sans-serif;">
+    🌡 <b>공기 온도</b> - 최적: 24 ~ 26 °C<br>
+    💧 <b>상대 습도 (RH)</b> - 최적: 65 ~ 75 %<br>
+    🌬 <b>공기질 (%)</b> - 최적: 26 ~ 30 %<br>
+    🌱 <b>토양(배지) 수분함량</b> - 최적: 45 ~ 55 %<br>
+    ⚡️ <b>EC (전기전도도)</b> - 최적: 2.5 ~ 3.0 mS/cm<br>
+    🧪 <b>pH (용액)</b> - 최적: 5.8 ~ 6.2
+    </p>
+    )";
+
+    QMessageBox box(this);
+    box.setWindowTitle(QString::fromUtf8("🍅 토마토 최적 환경 안내"));
+    box.setTextFormat(Qt::RichText);                        // HTML 지원
+    box.setTextInteractionFlags(Qt::TextSelectableByMouse);
+    box.setText(htmlMsg);
+    box.exec();
+}
+

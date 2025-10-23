@@ -17,6 +17,8 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QSignalBlocker>
+#include <QPalette>
+#include <QMessageBox>
 
 // ======================== 헬퍼/상수 ========================
 static inline QString ledText(int idx)
@@ -31,6 +33,8 @@ static inline QString ledText(int idx)
 }
 
 // Tab2와 동일한 설정 파일 경로 규칙
+static bool s_inRed = false; // RED 구간 ‘안’에 있는지 단순 상태
+
 static inline QString settingsPath() {
     // 0) 환경변수 우선
     const QByteArray v = qgetenv("SETTINGS_FILE");
@@ -64,7 +68,91 @@ static inline QString settingsPath() {
 // 다이얼: 12시간 × 30분 = 24눈금, 눈금 사이 표시용까지 48스텝
 static constexpr int kDialSteps        = 48;  // 0..47
 static constexpr int kBottomToTopSteps = 24;  // 보정
+enum class Dir { HigherIsWorse, LowerIsWorse };
 
+struct Rule { int y; int r; Dir dir; };
+
+struct BiRule {
+    int low_y  = INT_MIN;
+    int low_r  = INT_MIN;
+    bool useLow = false;
+
+    int high_y = INT_MAX;
+    int high_r = INT_MAX;
+    bool useHigh = false;
+};
+
+static inline QColor kOrange() { return QColor(255, 165, 0); }
+static inline QColor kRed()        { return Qt::red; }
+static inline QColor kBlack()      { return Qt::black; }
+
+static inline BiRule ruleFor(ChangeSetting::Mode m) {
+    using M = ChangeSetting::Mode;
+    switch (m) {
+    case M::Temp: {
+        BiRule r;
+        r.low_y   = 23;  r.low_r   = 19;  r.useLow  = true;
+        r.high_y  = 27;  r.high_r  = 31;  r.useHigh = true;
+        return r;
+    }
+    case M::Humi: {
+        BiRule r;
+        r.low_y   = 64;  r.low_r   = 54;  r.useLow  = true;
+        r.high_y = 76;  r.high_r  = 86;  r.useHigh = true;
+        return r;
+    }
+    case M::Air: {
+        BiRule r;
+        r.low_y   = 25;  r.low_r   = 23;  r.useLow  = true;
+        r.high_y = 31;  r.high_r  = 33;  r.useHigh = true;
+        return r;
+    }
+    case M::SoilHumi: {
+        BiRule r;
+        r.low_y   = 44;  r.low_r   = 32;  r.useLow  = true;
+        r.high_y = 56;  r.high_r  = 66;  r.useHigh = true;
+        return r;
+    }
+    case M::EC: {
+        BiRule r;
+        r.low_y   = 2.4;  r.low_r   = 1.9;  r.useLow = true;
+        r.high_y = 3.1;   r.high_r = 3.6;    r.useHigh = true;
+        return r;
+    }
+    case M::PH: {
+        BiRule r;
+        r.low_y = 5.7;    r.low_r = 5.4;     r.useLow  = true;
+        r.high_y = 6.3;   r.high_r = 6.6;    r.useHigh = true;
+        return r;
+    }
+    default:
+        return BiRule{}; // 둘 다 비활성
+    }
+}
+
+// 값→색 (빨강 우선, 그 다음 노랑)
+static inline QColor pickColor(ChangeSetting::Mode m, int v) {
+    const BiRule r = ruleFor(m);
+
+    // 하한 체크(작을수록 위험)
+    if (r.useLow) {
+        if (v <= r.low_r) return kRed();
+        if (v <= r.low_y) return kOrange();
+    }
+    // 상한 체크(클수록 위험)
+    if (r.useHigh) {
+        if (v >= r.high_r) return kRed();
+        if (v >= r.high_y) return kOrange();
+    }
+    return kBlack();
+}
+
+static inline void setLcdColor(QLCDNumber* lcd, const QColor& c) {
+    if (!lcd) return;
+    QPalette p = lcd->palette();
+    p.setColor(QPalette::WindowText, c);  // QLCDNumber Filled 세그먼트
+    lcd->setPalette(p);
+}
 // ======================== 본체 ========================
 ChangeSetting::ChangeSetting(QWidget *parent)
     : QDialog(parent)
@@ -115,14 +203,14 @@ ChangeSetting::ChangeSetting(QWidget *parent)
         ui->pDialtime->setSingleStep(2);      // 30분 단위만
         ui->pDialtime->setPageStep(2);
         ui->pDialtime->setWrapping(true);
-        ui->pDialtime->setNotchesVisible(false); // ★ 기본 눈금 끔
+        ui->pDialtime->setNotchesVisible(false);
 
         connect(ui->pDialtime, &QDial::valueChanged, this, [this](int v){
             // 다이얼 조작 → 정확 모드 해제
             m_nowExactActive = false;
 
             // 홀수값 들어오면 짝수로 스냅
-            int t = (v + kDialSteps - kBottomToTopSteps) % kDialSteps; // 0..47 (위 기준)
+            int t = (v + kDialSteps - kBottomToTopSteps) % kDialSteps;
             if (t % 2 != 0) {
                 int even = (t < kDialSteps-1 ? t+1 : t-1);
                 int desired = (even + kBottomToTopSteps) % kDialSteps;
@@ -136,11 +224,11 @@ ChangeSetting::ChangeSetting(QWidget *parent)
 
     // AM/PM 토글: 사용자 조작 시에만 정확모드 해제
     if (ui->pBam) connect(ui->pBam, &QRadioButton::toggled, this, [this](bool){
-        m_nowExactActive = false;                              // ★ 사용자 토글 시
+        m_nowExactActive = false;
         if (ui->pDialtime) updateTimeFromDial(ui->pDialtime->value());
     });
     if (ui->pBpm) connect(ui->pBpm, &QRadioButton::toggled, this, [this](bool){
-        m_nowExactActive = false;                              // ★ 사용자 토글 시
+        m_nowExactActive = false;
         if (ui->pDialtime) updateTimeFromDial(ui->pDialtime->value());
     });
 
@@ -433,6 +521,16 @@ void ChangeSetting::updateView()
 
     ui->set->setDigitCount(digits);
     ui->set->display(m_value);
+
+    const QColor c = pickColor(m_mode, m_value);
+    setLcdColor(ui->set, c);
+
+    if (c == Qt::red && !s_inRed) {
+        s_inRed = true;
+        QMessageBox::warning(this, "경고", "설정값이 위험 범위에 진입했습니다.");
+    } else if (c != Qt::red) {
+        s_inRed = false;
+    }
 }
 
 void ChangeSetting::updateTimeFromDial(int dialVal)
@@ -458,8 +556,8 @@ void ChangeSetting::updateTimeFromDial(int dialVal)
         }
 
         if (ui->pDialtime) {
-            const int baseHalf = minutes12 / 30; // 0..23
-            const int rem      = minutes12 % 30; // 0..29
+            const int baseHalf = minutes12 / 30;
+            const int rem      = minutes12 % 30;
             int sBase = baseHalf * 2 + (rem == 0 ? 0 : 1); // rem>0 → 홀수
             int desired = (sBase + kBottomToTopSteps) % kDialSteps;
             QSignalBlocker b(ui->pDialtime);

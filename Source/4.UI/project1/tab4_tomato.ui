@@ -264,7 +264,7 @@
       <item row="2" column="0">
        <widget class="QLabel" name="label_13">
         <property name="text">
-         <string>실내 공기질(index)</string>
+         <string>실내 공기질(%)</string>
         </property>
         <property name="alignment">
          <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
@@ -315,7 +315,7 @@
       <item row="3" column="2">
        <widget class="QLabel" name="label_15">
         <property name="text">
-         <string>토양 PH(pH)</string>
+         <string>토양 pH(pH)</string>
         </property>
         <property name="alignment">
          <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
@@ -325,7 +325,7 @@
       <item row="3" column="0">
        <widget class="QLabel" name="label_14">
         <property name="text">
-         <string>실내 조도(lux)</string>
+         <string>실내 조도(%)</string>
         </property>
         <property name="alignment">
          <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>

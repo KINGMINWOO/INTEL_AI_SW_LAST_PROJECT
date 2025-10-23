@@ -41,6 +41,8 @@ private slots:
     // 스케줄(싱글샷) 타이머 콜백
     void onScheduledFire();
 
+    void on_pPBquestion_clicked();
+
 private:
     Ui::Tab2_set *ui = nullptr;
     ChangeSetting* mChangeDlg = nullptr;
@@ -51,7 +53,7 @@ private:
     int m_illu      = 300;   // 파일에 없으면 기본값 유지
     int m_air       = 1;
     int m_soilHumi  = 35;
-    int m_ec        = 2;
+    int m_ec        = 1000;
     int m_ph        = 7;
     int m_ledLevel  = 1;     // 0:OFF 1:LOW 2:MID 3:HIGH
     int m_timeMin   = 540;   // 분(예: 09:00)

@@ -6,5 +6,6 @@
         <file>icons/tomato.png</file>
         <file>icons/tomato1.png</file>
         <file>icons/tomato2.png</file>
+        <file>icons/question_mark.png</file>
     </qresource>
 </RCC>

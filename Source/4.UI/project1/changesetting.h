@@ -41,9 +41,9 @@ private:
     Mode  m_mode { Mode::Temp };
 
     // 숫자 모드
-    int   m_value { 0 };
-    int   m_min   { 0 };
-    int   m_max   { 100 };
+    float   m_value { 0.0 };
+    float   m_min   { 0.0 };
+    float   m_max   { 100.0 };
 
     // LED 모드 전용 (0:OFF, 1:LOW, 2:MID, 3:HIGH)
     int   m_led   { 0 };
