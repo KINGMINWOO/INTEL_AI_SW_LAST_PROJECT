@@ -1,5 +1,0 @@
-train: ../yolo_dataset_prepared/images/train
-val: ../yolo_dataset_prepared/images/validation
-
-nc: 3
-names: ['ripe', 'unripe', 'rotten']

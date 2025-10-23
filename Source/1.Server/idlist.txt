@@ -1,6 +1,0 @@
-# 허용되는 클라이언트 ID와 비밀번호 목록
-# 형식: id:password
-default_user:default_pass
-turtlebot1:turtlebot1234
-CCTV1:CCTV1234
-CCTV2:CCTV1234
