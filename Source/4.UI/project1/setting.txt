@@ -1,0 +1,14 @@
+[AIR]
+air=30
+humi=70
+illu=300
+temp=25
+
+[LAND]
+ec=2
+humi=50
+ph=6
+
+[SYS]
+led=0
+time=15:11

@@ -1,0 +1,11 @@
+<RCC>
+    <qresource prefix="/icons">
+        <file>icons/down.png</file>
+        <file>icons/home.png</file>
+        <file>icons/up.png</file>
+        <file>icons/tomato.png</file>
+        <file>icons/tomato1.png</file>
+        <file>icons/tomato2.png</file>
+        <file>icons/question_mark.png</file>
+    </qresource>
+</RCC>

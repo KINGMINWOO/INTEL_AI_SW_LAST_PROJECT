@@ -1,0 +1,6 @@
+<RCC>
+    <qresource prefix="/fonts">
+        <file>fonts/DSEG14Classic-Bold.ttf</file>
+        <file>fonts/DSEG14Classic-Regular.ttf</file>
+    </qresource>
+</RCC>
